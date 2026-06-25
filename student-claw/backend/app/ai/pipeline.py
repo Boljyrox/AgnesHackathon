@@ -332,6 +332,104 @@ async def semantic_search(
 
 
 # ---------------------------------------------------------------------------
+# Cache cleansing (blueprint §5.3) — 8-step transactional procedure
+# ---------------------------------------------------------------------------
+@dataclass
+class CleanseResult:
+    ok: bool
+    vectors_deleted: bool
+    files_deleted: bool
+    messages_soft_deleted: int
+    status: str
+
+
+async def clear_project_cache(project_id: str, *, include_files: bool) -> CleanseResult:
+    """
+    Execute the cache-cleanse for a project. The authorization check (lead role)
+    is enforced by the calling endpoint; this performs steps 2-8.
+
+    Qdrant and PostgreSQL are separate systems, so the steps are not one atomic
+    transaction — each is made idempotent and partial failures are isolated:
+      - vector delete fails  → abort, status reset to 'active'
+      - MinIO delete fails   → vectors already gone; logged, continue
+      - soft-delete fails    → retried by caller; idempotent
+    """
+    from sqlalchemy import func, update as _sql_update
+
+    from app.database.models import MessageLog, Project
+
+    pid = uuid.UUID(project_id)
+    vectors_deleted = False
+    files_deleted = False
+    soft_deleted = 0
+
+    # Step 2: LOCK PROJECT (halt ingestion — the worker checks status).
+    async with session_scope() as session:
+        project = await session.get(Project, pid)
+        if project is None:
+            raise ValueError(f"Project {project_id} not found.")
+        chat_id = project.chat_id
+        project.status = "clearing"  # type: ignore[assignment]
+
+    name = collection_name(chat_id)
+
+    # Step 3: DELETE VECTOR STORE (single atomic Qdrant call).
+    try:
+        client = get_qdrant_client()
+        if await client.collection_exists(name):
+            await client.delete_collection(collection_name=name)
+        vectors_deleted = True
+    except Exception as exc:
+        logger.error("Cache cleanse: vector delete failed for %s: %s", name, exc)
+        async with session_scope() as session:
+            await session.execute(
+                _sql_update(Project).where(Project.id == pid).values(status="active")
+            )
+        raise
+
+    # Step 4: DELETE MINIO FILES (optional, configurable).
+    if include_files:
+        try:
+            await storage.delete_bucket(chat_id)
+            files_deleted = True
+        except Exception as exc:  # non-fatal: vectors already cleared
+            logger.error("Cache cleanse: MinIO bucket delete failed: %s", exc)
+
+    # Step 5: SOFT-DELETE MESSAGE LOGS (optimized single UPDATE).
+    async with session_scope() as session:
+        result = await session.execute(
+            _sql_update(MessageLog)
+            .where(MessageLog.project_id == pid, MessageLog.deleted_at.is_(None))
+            .values(
+                deleted_at=func.now(),
+                is_vectorized=False,
+                qdrant_point_ids=[],
+            )
+        )
+        soft_deleted = result.rowcount or 0
+
+    # Step 6: RESET PROJECT STATUS (steps 7-8: relational data untouched).
+    async with session_scope() as session:
+        await session.execute(
+            _sql_update(Project)
+            .where(Project.id == pid)
+            .values(status="archived", qdrant_point_count=0, cleared_at=func.now())
+        )
+
+    logger.info(
+        "Cache cleansed project %s: vectors=%s files=%s msgs=%d",
+        project_id, vectors_deleted, files_deleted, soft_deleted,
+    )
+    return CleanseResult(
+        ok=True,
+        vectors_deleted=vectors_deleted,
+        files_deleted=files_deleted,
+        messages_soft_deleted=soft_deleted,
+        status="archived",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Worker
 # ---------------------------------------------------------------------------
 async def _process_job(job: dict) -> None:

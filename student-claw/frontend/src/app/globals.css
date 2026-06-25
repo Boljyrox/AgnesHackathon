@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: "Inter", system-ui, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+}
+
+/* Telegram-HTML rendered inside Agnes responses. */
+.agnes-html code {
+  @apply rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.85em] text-slate-800;
+}
+.agnes-html pre {
+  @apply my-2 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-xs text-slate-100;
+}
+.agnes-html a {
+  @apply text-brand-600 underline underline-offset-2 hover:text-brand-700;
+}
+.agnes-html b,
+.agnes-html strong {
+  @apply font-semibold;
+}
+
+/* Respect users who prefer reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

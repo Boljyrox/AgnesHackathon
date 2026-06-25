@@ -30,6 +30,27 @@ export const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379/0";
 
 export const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
+// ---- Google Calendar OAuth2 (blueprint §6.5) ----
+export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "";
+export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? "";
+export const GOOGLE_REDIRECT_URI =
+  process.env.GOOGLE_REDIRECT_URI ??
+  "http://localhost:3000/api/integrations/google/callback";
+export const GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth";
+export const GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token";
+export const GOOGLE_CALENDAR_SCOPE =
+  "https://www.googleapis.com/auth/calendar.events";
+
+/** AES-256-GCM key (hex or base64, 32 bytes) — shared with FastAPI. */
+export const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? "";
+
+/** Secret used to sign the short-lived PKCE/state OAuth cookie. */
+export const OAUTH_COOKIE_SECRET =
+  process.env.OAUTH_COOKIE_SECRET ?? process.env.JWT_SECRET ?? "";
+
+export const OAUTH_COOKIE_NAME = "g_oauth";
+export const OAUTH_STATE_TTL_SECONDS = 10 * 60; // 10 minutes
+
 /** Downstream FastAPI endpoint paths (BFF → backend mapping). */
 export const BACKEND_ROUTES = {
   login: "/auth/login",
@@ -37,6 +58,18 @@ export const BACKEND_ROUTES = {
   refresh: "/auth/refresh",
   projects: "/projects",
   projectLink: "/projects/link",
+  googleCalendar: "/students/me/google-calendar",
+} as const;
+
+/** Parameterised backend paths for project sub-resources. */
+export const backendPath = {
+  tasks: (projectId: string) => `/projects/${projectId}/tasks`,
+  task: (projectId: string, taskId: string) =>
+    `/projects/${projectId}/tasks/${taskId}`,
+  context: (projectId: string) => `/projects/${projectId}/context`,
+  deadlines: (projectId: string) => `/projects/${projectId}/deadlines`,
+  contributions: (projectId: string) => `/projects/${projectId}/contributions`,
+  clearcache: (projectId: string) => `/projects/${projectId}/clearcache`,
 } as const;
 
 /**
