@@ -27,7 +27,10 @@ from telegram.ext import (
     filters,
 )
 
+from app.ai import queue, storage
+from app.ai.agent import run_agent
 from app.bot import events, services
+from app.bot.config import MAX_FILE_SIZE_BYTES
 from app.database.models import ContentType
 
 logger = logging.getLogger("student_claw.bot.handlers")
@@ -85,6 +88,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Student Claw commands:\n"
         "/start — show this group's Project Key\n"
         "/verify <token> — link your web account (run inside the group)\n"
+        "/ask <question> — ask Agnes about this project\n"
         "/help — show this help"
     )
 
@@ -238,10 +242,51 @@ def _classify_content(update: Update) -> tuple[ContentType, str | None, str | No
     return ContentType.text, (msg.text or msg.caption), None
 
 
+async def _download_and_store(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, content_type: ContentType
+) -> tuple[str | None, str | None]:
+    """
+    Download a media message from Telegram and stream it into MinIO.
+
+    Returns (file_storage_path, file_mime_type). Photos/documents are stored;
+    oversized files and voice notes are skipped (voice has no transcription
+    path yet — Module 3 only embeds text/image/document). Returns (None, None)
+    when nothing was stored.
+    """
+    msg = update.effective_message
+    chat = update.effective_chat
+
+    if content_type == ContentType.image and msg.photo:
+        tg_file = await msg.photo[-1].get_file()  # largest resolution
+        category, mime = "imgs", "image/jpeg"
+        filename = f"{tg_file.file_unique_id}.jpg"
+    elif content_type == ContentType.document and msg.document:
+        doc = msg.document
+        if doc.file_size and doc.file_size > MAX_FILE_SIZE_BYTES:
+            logger.info("Skipping oversized document (%s bytes).", doc.file_size)
+            return None, doc.mime_type
+        tg_file = await doc.get_file()
+        category = "docs"
+        mime = doc.mime_type
+        filename = doc.file_name or tg_file.file_unique_id
+    else:
+        # Voice / unsupported — metadata only.
+        return None, (msg.voice.mime_type if msg.voice else None)
+
+    data = bytes(await tg_file.download_as_bytearray())
+    if len(data) > MAX_FILE_SIZE_BYTES:
+        logger.info("Skipping oversized download (%d bytes).", len(data))
+        return None, mime
+
+    storage_path = await storage.store_bytes(chat.id, category, filename, data, mime)
+    return storage_path, mime
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Intercept all non-command text/image/document/voice messages in group chats
-    and persist their metadata to message_logs (is_vectorized=False).
+    Intercept all non-command text/image/document/voice messages in group chats,
+    stream any media into MinIO, persist metadata to message_logs
+    (is_vectorized=False), then enqueue an async embedding job.
     """
     chat = update.effective_chat
     msg = update.effective_message
@@ -254,6 +299,15 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     content_type, raw_text, file_mime_type = _classify_content(update)
 
+    file_storage_path: str | None = None
+    if content_type in (ContentType.image, ContentType.document):
+        try:
+            file_storage_path, file_mime_type = await _download_and_store(
+                update, context, content_type
+            )
+        except Exception as exc:  # storage/download failure must not drop the log
+            logger.error("Failed to download/store media in chat %s: %s", chat.id, exc)
+
     received_at = msg.date or datetime.now(timezone.utc)
 
     log_id = await services.log_incoming_message(
@@ -265,18 +319,50 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         received_at=received_at,
         raw_text=raw_text,
         file_mime_type=file_mime_type,
+        file_storage_path=file_storage_path,
     )
 
     if log_id is None:
-        # No project registered for this chat — prompt setup once.
         logger.debug("Message in unregistered chat_id=%s ignored.", chat.id)
         return
 
+    # Enqueue async vectorization for content we can embed.
+    if content_type in (ContentType.text, ContentType.image, ContentType.document):
+        # Text needs actual content; media needs a stored file.
+        has_payload = bool(raw_text) if content_type == ContentType.text else bool(file_storage_path)
+        if has_payload:
+            await queue.enqueue_embed_job(
+                message_log_id=log_id,
+                chat_id=chat.id,
+                content_type=content_type.value,
+            )
+
     logger.debug(
-        "Logged message_log=%s chat_id=%s type=%s vectorized=False",
+        "Logged message_log=%s chat_id=%s type=%s (enqueued for embedding)",
         log_id, chat.id, content_type.value,
     )
-    # Module 3 will enqueue this message_log_id onto the Redis embed_queue here.
+
+
+# ---------------------------------------------------------------------------
+# /ask — invoke the Agnes agent
+# ---------------------------------------------------------------------------
+async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run the bounded agentic loop on the user's question and reply in HTML."""
+    chat = update.effective_chat
+    msg = update.effective_message
+
+    if chat is None or chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await msg.reply_text("Ask me inside your project group chat.")
+        return
+
+    question = " ".join(context.args).strip() if context.args else ""
+    if not question:
+        await msg.reply_text("Usage: /ask <your question about the project>")
+        return
+
+    await context.bot.send_chat_action(chat_id=chat.id, action="typing")
+    answer = await run_agent(chat.id, question)
+    await msg.reply_text(answer or "🤔 I couldn't form a response.", parse_mode="HTML")
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +374,7 @@ def register_handlers(application) -> None:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("verify", verify_command))
+    application.add_handler(CommandHandler("ask", ask_command))
 
     # Bot membership changes (primary join-detection path).
     application.add_handler(

@@ -1,0 +1,233 @@
+"""
+Agnes AI orchestration & bounded agentic loop (blueprint §3.1, §3.2, §3.4).
+
+The orchestration state lives here, not inside Agnes: we build the system
+prompt, run the tool-calling loop (max 5 rounds, 30s budget), execute tools
+server-side, feed results back as `role: "tool"` messages, and return the final
+Telegram-HTML-safe reply.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from typing import Any, Optional
+
+from app.ai import repository, tools
+from app.ai.clients import get_agnes_client
+from app.ai.config import (
+    AGENT_MAX_ITERATIONS,
+    AGENT_TIMEOUT_SECONDS,
+    RECENT_MESSAGE_WINDOW,
+    get_ai_settings,
+)
+
+logger = logging.getLogger("student_claw.ai.agent")
+
+
+# ---------------------------------------------------------------------------
+# System prompt
+# ---------------------------------------------------------------------------
+_ROLE = (
+    "You are Agnes, an AI project-management assistant embedded in a Telegram "
+    "group of university students collaborating on a module project. You help "
+    "track deadlines, delegate tasks, answer questions about the project's "
+    "history, and (only when explicitly asked) score member contributions."
+)
+
+# Telegram HTML constraints — Telegram's sendMessage(parse_mode=HTML) supports
+# only a small tag set. Markdown headers/syntax cause delivery failures.
+_FORMATTING = (
+    "OUTPUT FORMAT — STRICT. Your reply is sent to Telegram with parse_mode=HTML. "
+    "You MUST output ONLY plain text plus this exact set of Telegram-supported "
+    "HTML tags: <b>bold</b>, <i>italic</i>, <u>underline</u>, <s>strike</s>, "
+    "<code>inline code</code>, <pre>code block</pre>, and "
+    "<a href=\"https://...\">links</a>. "
+    "NEVER use Markdown: no '#' headers, no '**', no '__', no '*' bullets, no "
+    "'```' fences, no '[text](url)' links. "
+    "Escape any literal '<', '>' or '&' in normal prose as &lt; &gt; &amp;. "
+    "Do not nest unsupported tags. Keep replies concise and scannable."
+)
+
+_BEHAVIOR = (
+    "BEHAVIORAL CONSTRAINTS: "
+    "(1) Never invent deadlines, tasks, or facts not explicitly present in the "
+    "conversation or returned by search_project_context. "
+    "(2) Only attribute tasks/scores to real members listed in PROJECT MEMBERS. "
+    "(3) Before answering questions about past project information not in the "
+    "recent window, call search_project_context first. "
+    "(4) The chat_id is supplied by the system; use the value provided and never "
+    "guess it. "
+    "(5) Only call log_contribution_metric when a member explicitly requests it."
+)
+
+
+def build_system_prompt(
+    ctx: repository.ProjectContext, recent: list[repository.RecentMessage]
+) -> str:
+    """Assemble the five-section system prompt (§3.2)."""
+    members_lines = (
+        "\n".join(
+            f"- {m.display_name} (@{m.telegram_username or 'no_username'}) — {m.role}"
+            for m in ctx.members
+        )
+        or "- (no members verified yet)"
+    )
+
+    recent_lines = (
+        "\n".join(f"[{r.telegram_message_id}] {r.sender}: {r.text}" for r in recent)
+        or "(no recent messages)"
+    )
+
+    return (
+        f"{_ROLE}\n\n"
+        f"PROJECT CONTEXT\n"
+        f"Name: {ctx.name}\n"
+        f"Module: {ctx.module_code or 'N/A'}\n"
+        f"chat_id: {ctx.chat_id}\n"
+        f"Status: {ctx.status}\n\n"
+        f"PROJECT MEMBERS\n{members_lines}\n\n"
+        f"RECENT MESSAGES (oldest first)\n{recent_lines}\n\n"
+        f"{_BEHAVIOR}\n\n"
+        f"{_FORMATTING}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bounded agentic loop
+# ---------------------------------------------------------------------------
+def _signature(name: str, raw_args: str) -> str:
+    """Stable signature for circular-call detection."""
+    try:
+        normalized = json.dumps(json.loads(raw_args or "{}"), sort_keys=True)
+    except json.JSONDecodeError:
+        normalized = raw_args or ""
+    return f"{name}:{normalized}"
+
+
+async def _run_loop(chat_id: int, messages: list[dict[str, Any]]) -> str:
+    client = get_agnes_client()
+    model = get_ai_settings().chat_model
+    seen_signatures: set[str] = set()
+
+    for iteration in range(1, AGENT_MAX_ITERATIONS + 1):
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tools.TOOLS,
+            tool_choice="auto",
+            temperature=0.2,
+        )
+        choice = response.choices[0]
+        msg = choice.message
+
+        if not msg.tool_calls:
+            # finish_reason == "stop": final answer.
+            return (msg.content or "").strip()
+
+        # Append the assistant turn (with its tool_calls) before tool results.
+        messages.append(
+            {
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ],
+            }
+        )
+
+        for tc in msg.tool_calls:
+            name = tc.function.name
+            raw_args = tc.function.arguments or "{}"
+            sig = _signature(name, raw_args)
+
+            # Circular-call detection (§3.4): drop exact duplicate calls.
+            if sig in seen_signatures:
+                logger.info("Dropping duplicate tool call %s", sig)
+                messages.append(
+                    _tool_message(tc.id, json.dumps({"ok": False, "detail": "duplicate call skipped"}))
+                )
+                continue
+            seen_signatures.add(sig)
+
+            try:
+                args = json.loads(raw_args)
+            except json.JSONDecodeError as exc:
+                logger.warning("Malformed tool arguments for %s: %s", name, exc)
+                messages.append(_tool_message(tc.id, json.dumps({"ok": False, "detail": f"invalid JSON arguments: {exc}"})))
+                continue
+
+            try:
+                result = await tools.execute_tool(name, args, chat_id=chat_id)
+            except tools.ToolExecutionError as exc:
+                logger.warning("Tool execution error (%s): %s", name, exc)
+                result = json.dumps({"ok": False, "detail": str(exc)})
+            except Exception as exc:  # defensive: never crash the loop
+                logger.exception("Unexpected tool failure (%s): %s", name, exc)
+                result = json.dumps({"ok": False, "detail": "internal tool error"})
+
+            messages.append(_tool_message(tc.id, result))
+
+    # Exhausted iterations without a clean stop — ask for a final summary.
+    logger.info("Agent hit max iterations (%d); requesting final answer.", AGENT_MAX_ITERATIONS)
+    messages.append(
+        {
+            "role": "system",
+            "content": "Tool budget exhausted. Reply now using what you have, in Telegram HTML.",
+        }
+    )
+    final = await client.chat.completions.create(
+        model=model, messages=messages, temperature=0.2
+    )
+    return (final.choices[0].message.content or "").strip()
+
+
+def _tool_message(tool_call_id: str, content: str) -> dict[str, Any]:
+    return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
+
+
+async def run_agent(
+    chat_id: int,
+    user_message: str,
+    *,
+    history: Optional[list[dict[str, Any]]] = None,
+) -> str:
+    """
+    Top-level entrypoint. Loads project context, builds the prompt, runs the
+    bounded loop under a 30s budget, and returns Telegram-HTML-safe text.
+
+    Returns a graceful fallback string on timeout / missing project rather than
+    raising, so the bot can always reply.
+    """
+    ctx = await repository.load_project_context(chat_id)
+    if ctx is None:
+        return "⚠️ This group isn't registered yet. Send /start to set up Student Claw."
+
+    recent = await repository.load_recent_messages(chat_id, RECENT_MESSAGE_WINDOW)
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": build_system_prompt(ctx, recent)}
+    ]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        return await asyncio.wait_for(
+            _run_loop(chat_id, messages), timeout=AGENT_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Agent timed out after %ss for chat_id=%s.", AGENT_TIMEOUT_SECONDS, chat_id)
+        return "⏳ That took too long to process. Please try again or narrow your question."
+    except Exception as exc:  # pragma: no cover - top-level guard
+        logger.exception("Agent failure for chat_id=%s: %s", chat_id, exc)
+        return "⚠️ Something went wrong while processing that. Please try again."

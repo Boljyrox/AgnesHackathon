@@ -1,0 +1,105 @@
+"""
+AI / RAG subsystem configuration (blueprint §3, §5, §7.3).
+
+Everything is env-driven. Loaders are lazy + cached so that importing a single
+piece (e.g. the lightweight queue used by the bot process) never forces the
+whole ML stack or a populated AI environment.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from functools import lru_cache
+
+# Qdrant collection naming — must match app.bot.keys.vector_namespace_for.
+COLLECTION_TEMPLATE = "project_{chat_id}"
+
+# Redis keys for the async ingestion pipeline (§5.1).
+EMBED_QUEUE_KEY = "embed_queue"
+EMBED_DEAD_LETTER_KEY = "embed_dead_letter"
+
+# Embedding batch ceiling (§5.1: "up to 20 chunks per API call").
+EMBED_BATCH_SIZE = 20
+
+# Agentic loop bounds (§3.4).
+AGENT_MAX_ITERATIONS = 5
+AGENT_TIMEOUT_SECONDS = 30
+
+# How many recent text logs to inject into the system prompt window (§3.2).
+RECENT_MESSAGE_WINDOW = 30
+
+# Chunking constants (§2.4).
+PDF_CHUNK_TOKENS = 512
+PDF_CHUNK_OVERLAP = 64
+IMAGE_CHUNK_TOKENS = 256
+IMAGE_CHUNK_OVERLAP = 32
+CHAT_WINDOW_MESSAGES = 10
+CHAT_WINDOW_OVERLAP = 2
+
+# Known document MIME types.
+MIME_PDF = "application/pdf"
+MIME_PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+
+def _require(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Required environment variable {name!r} is not set (§7.3).")
+    return value
+
+
+@dataclass(frozen=True)
+class AISettings:
+    agnes_api_key: str
+    agnes_base_url: str
+    chat_model: str
+    embed_model: str
+    embed_dim: int
+
+
+@dataclass(frozen=True)
+class QdrantSettings:
+    url: str
+    api_key: str | None
+
+
+@dataclass(frozen=True)
+class MinioSettings:
+    endpoint: str
+    access_key: str
+    secret_key: str
+    secure: bool
+
+
+@lru_cache(maxsize=1)
+def get_ai_settings() -> AISettings:
+    return AISettings(
+        agnes_api_key=_require("AGNES_AI_API_KEY"),
+        agnes_base_url=os.getenv("AGNES_AI_BASE_URL", "https://apihub.agnes-ai.com/v1"),
+        chat_model=os.getenv("AGNES_CHAT_MODEL", "agnes-1"),
+        embed_model=os.getenv("AGNES_EMBED_MODEL", "agnes-embeddings"),
+        embed_dim=int(os.getenv("EMBED_DIM", "1536")),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_qdrant_settings() -> QdrantSettings:
+    return QdrantSettings(
+        url=os.getenv("QDRANT_URL", "http://localhost:6333"),
+        api_key=os.getenv("QDRANT_API_KEY") or None,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_minio_settings() -> MinioSettings:
+    return MinioSettings(
+        endpoint=os.getenv("MINIO_ENDPOINT", "localhost:9000"),
+        access_key=_require("MINIO_ACCESS_KEY"),
+        secret_key=_require("MINIO_SECRET_KEY"),
+        secure=os.getenv("MINIO_SECURE", "false").lower() in {"1", "true", "yes"},
+    )
+
+
+def collection_name(chat_id: int) -> str:
+    return COLLECTION_TEMPLATE.format(chat_id=chat_id)
