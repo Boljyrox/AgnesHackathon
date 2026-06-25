@@ -55,12 +55,18 @@ export function Sidebar({ username = "You" }: { username?: string }) {
         aria-label="Primary"
       >
         {/* Brand */}
-        <div className="flex h-14 items-center gap-2 border-b border-slate-200 px-4">
-          <span className="grid h-7 w-7 place-items-center rounded-lg bg-brand-500 text-sm font-bold text-white">
-            SC
-          </span>
+        <Link
+          href="/"
+          className="flex h-14 items-center gap-2 border-b border-slate-200 px-4 hover:opacity-80 transition-opacity"
+        >
+          <img
+            src="/logo.svg"
+            alt="Student Claw Logo"
+            className="h-7 w-7 rounded-lg object-contain"
+          />
           <span className="font-semibold">Student Claw</span>
-        </div>
+        </Link>
+
 
         {/* Project nav */}
         <nav className="flex-1 overflow-y-auto p-3" aria-label="Projects">

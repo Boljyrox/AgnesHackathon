@@ -200,10 +200,15 @@ async def run_agent(
     user_message: str,
     *,
     history: Optional[list[dict[str, Any]]] = None,
+    system_directive: Optional[str] = None,
 ) -> str:
     """
     Top-level entrypoint. Loads project context, builds the prompt, runs the
     bounded loop under a 30s budget, and returns Telegram-HTML-safe text.
+
+    `system_directive` injects an extra steering instruction (used by the
+    structured slash-commands like /summary, /assign_work) on top of the base
+    system prompt.
 
     Returns a graceful fallback string on timeout / missing project rather than
     raising, so the bot can always reply.
@@ -217,6 +222,8 @@ async def run_agent(
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": build_system_prompt(ctx, recent)}
     ]
+    if system_directive:
+        messages.append({"role": "system", "content": system_directive})
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": user_message})

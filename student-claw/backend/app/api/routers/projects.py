@@ -12,10 +12,12 @@ from app.api.deps import db_session, get_current_student, require_membership, re
 from app.api.schemas import (
     AskIn,
     AskOut,
+    MemberOut,
     ProjectLinkIn,
     ProjectOut,
 )
 from app.database.models import Project, ProjectLinkToken, Student, StudentProject, Task
+from app.database.queries import get_project_members
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -125,6 +127,18 @@ async def list_tasks(
             for t in tasks
         ]
     }
+
+
+@router.get("/{project_id}/members", response_model=list[MemberOut])
+async def list_members(
+    project_id: str,
+    student: Student = Depends(get_current_student),
+    session: AsyncSession = Depends(db_session),
+) -> list[MemberOut]:
+    project = await resolve_project(project_id, session)
+    await require_membership(project, student, session)
+    members = await get_project_members(session, project.id)
+    return [MemberOut.model_validate(m) for m in members]
 
 
 @router.post("/{project_id}/context", response_model=AskOut)

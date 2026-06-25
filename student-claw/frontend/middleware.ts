@@ -83,6 +83,7 @@ export async function middleware(req: NextRequest): Promise<NextResponse> {
 export const config = {
   // Protected surfaces only. (auth) pages and /api/auth/* are intentionally absent.
   matcher: [
+    "/", // dashboard overview root
     "/projects/:path*",
     "/settings/:path*",
     "/notifications/:path*",

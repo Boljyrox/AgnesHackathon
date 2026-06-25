@@ -22,6 +22,7 @@ from app.api.routers import (
     cache,
     contributions,
     deadlines,
+    me,
     projects,
     students,
     tasks,
@@ -84,6 +85,7 @@ async def health() -> dict[str, str]:
 
 # Web API routers (mounted at root to match the BFF contract).
 app.include_router(auth.router)
+app.include_router(me.router)
 app.include_router(projects.router)
 app.include_router(tasks.router)
 app.include_router(deadlines.router)

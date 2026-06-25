@@ -130,6 +130,30 @@ def _pdf_pages_sync(data: bytes) -> list[str]:
     return pages
 
 
+def _pdf_pages_to_pngs_sync(data: bytes, max_pages: int, zoom: float = 2.0) -> list[bytes]:
+    """Render the first `max_pages` PDF pages to PNG bytes (for vision fallback)."""
+    import fitz  # PyMuPDF
+
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception as exc:
+        raise ParseError(f"Could not open PDF for rendering: {exc}") from exc
+    images: list[bytes] = []
+    try:
+        matrix = fitz.Matrix(zoom, zoom)
+        for page in doc[:max_pages]:
+            pix = page.get_pixmap(matrix=matrix)
+            images.append(pix.tobytes("png"))
+    finally:
+        doc.close()
+    return images
+
+
+async def render_pdf_pages_to_images(data: bytes, max_pages: int = 5) -> list[bytes]:
+    """Async wrapper: render up to `max_pages` pages to PNG bytes."""
+    return await asyncio.to_thread(_pdf_pages_to_pngs_sync, data, max_pages)
+
+
 async def extract_text_from_pdf(data: bytes) -> ParsedContent:
     raw_pages = await asyncio.to_thread(_pdf_pages_sync, data)
     pages = [normalize_text(p) for p in raw_pages]

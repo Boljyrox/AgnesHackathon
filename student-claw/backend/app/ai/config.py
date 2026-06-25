@@ -54,6 +54,7 @@ class AISettings:
     agnes_api_key: str
     agnes_base_url: str
     chat_model: str
+    vision_model: str
     embed_model: str
     embed_dim: int
 
@@ -74,10 +75,14 @@ class MinioSettings:
 
 @lru_cache(maxsize=1)
 def get_ai_settings() -> AISettings:
+    chat_model = os.getenv("AGNES_CHAT_MODEL", "agnes-2.0-flash")
     return AISettings(
         agnes_api_key=_require("AGNES_AI_API_KEY"),
         agnes_base_url=os.getenv("AGNES_AI_BASE_URL", "https://apihub.agnes-ai.com/v1"),
-        chat_model=os.getenv("AGNES_CHAT_MODEL", "agnes-1"),
+        chat_model=chat_model,
+        # Vision-capable model for image/scanned-PDF understanding. Defaults to
+        # the chat model (agnes-2.0-flash supports vision inputs).
+        vision_model=os.getenv("AGNES_VISION_MODEL", chat_model),
         embed_model=os.getenv("AGNES_EMBED_MODEL", "agnes-embeddings"),
         embed_dim=int(os.getenv("EMBED_DIM", "1536")),
     )

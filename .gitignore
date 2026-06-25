@@ -19,3 +19,6 @@ venv/
 # ---- OS / editor ----
 .DS_Store
 *.log
+
+# pip bootstrap (one-off)
+get-pip.py

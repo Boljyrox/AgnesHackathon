@@ -25,7 +25,7 @@ from typing import Optional
 
 from qdrant_client import models as qmodels
 
-from app.ai import parser, queue, repository, storage
+from app.ai import parser, queue, repository, storage, vision
 from app.ai.chunking import (
     Chunk,
     ChatMessage,
@@ -120,8 +120,7 @@ async def _resolve_text_and_chunks(
         text = msg.extracted_text
         if not text:
             data = await storage.fetch_bytes(msg.file_storage_path)
-            parsed = await parser.extract_text_from_image(data)
-            text = parsed.text
+            text = await _understand_image(data, msg.file_mime_type or "image/jpeg")
             if text:
                 await repository.save_extracted_text(msg.id, text)
         if not text:
@@ -135,13 +134,18 @@ async def _resolve_text_and_chunks(
         parsed = await parser.parse_document(
             data, msg.file_mime_type, _basename(msg.file_storage_path)
         )
+        is_pptx = (msg.file_mime_type or "").lower() == MIME_PPTX or parsed.modality == "pptx"
+
+        # Scanned / image-only PDF: PyMuPDF found little text → fall back to vision.
+        if not is_pptx and len(parsed.text) < 40:
+            vision_text = await _understand_pdf_via_vision(data)
+            if vision_text:
+                parsed.text = vision_text
+
         if not parsed.text:
             return None
         await repository.save_extracted_text(msg.id, parsed.text)
-        if (msg.file_mime_type or "").lower() == MIME_PPTX or parsed.modality == "pptx":
-            chunks = chunk_pptx_slides(parsed.segments)
-        else:
-            chunks = chunk_pdf(parsed.text)
+        chunks = chunk_pptx_slides(parsed.segments) if is_pptx else chunk_pdf(parsed.text)
         return _Prepared(chunks, _basename(msg.file_storage_path))
 
     # voice (no transcription yet) or unknown → skip.
@@ -151,6 +155,40 @@ async def _resolve_text_and_chunks(
 
 def _basename(path: Optional[str]) -> Optional[str]:
     return path.rsplit("/", 1)[-1] if path else None
+
+
+async def _understand_image(data: bytes, mime: str) -> str:
+    """Agnes vision (primary) with Tesseract OCR fallback."""
+    try:
+        text = await vision.describe_image(data, mime)
+        if text:
+            return parser.normalize_text(text)
+    except vision.VisionError as exc:
+        logger.warning("Vision failed, falling back to OCR: %s", exc)
+    try:
+        parsed = await parser.extract_text_from_image(data)
+        return parsed.text
+    except Exception as exc:  # pragma: no cover - OCR optional
+        logger.warning("OCR fallback also failed: %s", exc)
+        return ""
+
+
+async def _understand_pdf_via_vision(data: bytes, max_pages: int = 5) -> str:
+    """Render image-only PDF pages and read each with the vision model."""
+    try:
+        pages = await parser.render_pdf_pages_to_images(data, max_pages=max_pages)
+    except Exception as exc:
+        logger.warning("PDF page render failed: %s", exc)
+        return ""
+    out: list[str] = []
+    for i, png in enumerate(pages):
+        try:
+            text = await vision.describe_image(png, "image/png")
+            if text:
+                out.append(parser.normalize_text(text))
+        except vision.VisionError as exc:
+            logger.warning("Vision failed on PDF page %d: %s", i, exc)
+    return "\n\n".join(out)
 
 
 async def vectorize_message(message_log_id: str) -> int:

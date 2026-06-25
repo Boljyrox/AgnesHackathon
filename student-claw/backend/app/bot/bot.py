@@ -30,6 +30,25 @@ logger = logging.getLogger("student_claw.bot")
 
 _application: Application | None = None
 
+# Commands shown in Telegram's "/" menu.
+_BOT_COMMANDS = [
+    ("ask", "Ask Agnes anything about this project"),
+    ("summary", "Project status briefing"),
+    ("assign_work", "Delegate outstanding tasks to members"),
+    ("project_goals", "State the project's goals"),
+    ("deadline", "List and capture deadlines"),
+    ("verify", "Link your web account"),
+    ("help", "Show all commands"),
+]
+
+
+async def _post_init(application: Application) -> None:
+    """Register the slash-command menu with Telegram once the app is ready."""
+    try:
+        await application.bot.set_my_commands(_BOT_COMMANDS)
+    except Exception as exc:  # pragma: no cover - network dependent
+        logger.warning("Could not set bot command menu: %s", exc)
+
 
 def build_application() -> Application:
     """Construct (once) and return the shared PTB Application singleton."""
@@ -42,6 +61,7 @@ def build_application() -> Application:
         ApplicationBuilder()
         .token(settings.bot_token)
         .concurrent_updates(True)  # process updates concurrently on the loop
+        .post_init(_post_init)
         .build()
     )
     register_handlers(application)

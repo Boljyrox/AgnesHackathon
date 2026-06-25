@@ -24,12 +24,12 @@ import {
   type UniqueIdentifier,
 } from "@dnd-kit/core";
 import { arrayMove, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import { KanbanColumn } from "@/components/tasks/KanbanColumn";
 import { TaskCardContent } from "@/components/tasks/TaskCard";
-import { ApiClientError, fetchTasks, updateTaskStatus } from "@/lib/api";
+import { createTask, fetchTasks, updateTaskStatus } from "@/lib/api";
 import { TASK_COLUMNS, type Task, type TaskStatus } from "@/lib/domain";
 import { useSSEEvent } from "@/providers/SSEProvider";
 
@@ -47,23 +47,16 @@ function isStatus(id: UniqueIdentifier): id is TaskStatus {
   return STATUSES.includes(id as TaskStatus);
 }
 
-export function TaskBoard({
-  projectId,
-  initialTasks,
-}: {
-  projectId: string;
-  initialTasks: Task[];
-}) {
+export function TaskBoard({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
 
   const { data: tasks } = useQuery({
     queryKey: ["tasks", projectId],
     queryFn: () => fetchTasks(projectId),
-    initialData: initialTasks,
-    retry: false,
+    initialData: [] as Task[],
   });
 
-  const [columns, setColumns] = useState<Columns>(() => groupByStatus(initialTasks));
+  const [columns, setColumns] = useState<Columns>(() => groupByStatus([]));
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -171,15 +164,9 @@ export function TaskBoard({
     try {
       await updateTaskStatus(projectId, taskId, status);
       queryClient.invalidateQueries({ queryKey: ["tasks", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["overview"] });
     } catch (err) {
-      const status404 =
-        err instanceof ApiClientError && [404, 501].includes(err.status);
-      if (status404) {
-        // Endpoint not wired yet (Module 6) — keep the optimistic move.
-        setNotice("Saved locally — task sync endpoint is not live yet.");
-        return;
-      }
-      // Genuine rejection → roll back.
+      // Roll back the optimistic move on any failure.
       if (snapshot) setColumns(snapshot);
       setNotice(
         err instanceof Error ? `Couldn't move task: ${err.message}` : "Couldn't move task.",
@@ -187,12 +174,23 @@ export function TaskBoard({
     }
   }
 
+  const isEmpty = STATUSES.every((s) => columns[s].length === 0);
+
   return (
     <div className="flex h-full flex-col">
+      <div className="flex items-center gap-3 px-4 pt-4">
+        <AddTaskForm projectId={projectId} />
+        {isEmpty && (
+          <p className="text-sm text-slate-400">
+            No tasks yet — add one, or let Agnes delegate work via <code>/assign_work</code>.
+          </p>
+        )}
+      </div>
+
       {notice && (
         <div
           role="status"
-          className="mx-4 mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+          className="mx-4 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
         >
           {notice}
         </div>
@@ -226,5 +224,68 @@ export function TaskBoard({
         </DragOverlay>
       </DndContext>
     </div>
+  );
+}
+
+function AddTaskForm({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+
+  const create = useMutation({
+    mutationFn: () => createTask(projectId, { title: title.trim(), priority: 2 }),
+    onSuccess: () => {
+      setTitle("");
+      setOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["tasks", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["overview"] });
+    },
+  });
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="rounded-lg bg-brand-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-brand-600"
+      >
+        + Add task
+      </button>
+    );
+  }
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (title.trim()) create.mutate();
+      }}
+      className="flex items-center gap-2"
+    >
+      <input
+        autoFocus
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder="Task title…"
+        className="w-64 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+      />
+      <button
+        type="submit"
+        disabled={create.isPending || !title.trim()}
+        className="rounded-lg bg-brand-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50"
+      >
+        {create.isPending ? "Adding…" : "Add"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setOpen(false);
+          setTitle("");
+        }}
+        className="rounded-lg px-2 py-1.5 text-sm text-slate-500 hover:bg-slate-100"
+      >
+        Cancel
+      </button>
+    </form>
   );
 }

@@ -63,9 +63,11 @@ export const BACKEND_ROUTES = {
 
 /** Parameterised backend paths for project sub-resources. */
 export const backendPath = {
+  overview: () => `/me/overview`,
   tasks: (projectId: string) => `/projects/${projectId}/tasks`,
   task: (projectId: string, taskId: string) =>
     `/projects/${projectId}/tasks/${taskId}`,
+  members: (projectId: string) => `/projects/${projectId}/members`,
   context: (projectId: string) => `/projects/${projectId}/context`,
   deadlines: (projectId: string) => `/projects/${projectId}/deadlines`,
   contributions: (projectId: string) => `/projects/${projectId}/contributions`,

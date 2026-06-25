@@ -26,7 +26,9 @@ def _redis() -> Any:
     if _client is None:
         import redis.asyncio as aioredis  # type: ignore
 
-        _client = aioredis.from_url(_REDIS_URL, decode_responses=True)
+        _client = aioredis.from_url(
+            _REDIS_URL, decode_responses=True, socket_timeout=None
+        )
     return _client
 
 

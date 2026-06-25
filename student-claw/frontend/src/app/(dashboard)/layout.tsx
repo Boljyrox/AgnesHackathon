@@ -7,6 +7,7 @@
  * has already guaranteed a valid session before this renders.
  */
 
+import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { Sidebar } from "@/components/Sidebar";
@@ -20,7 +21,10 @@ export default async function DashboardLayout({
   children: ReactNode;
 }) {
   const auth = await getSession();
-  const username = auth?.session.username ?? "You";
+  // Defense in depth: the middleware guards most paths, but the dashboard root
+  // ("/") isn't in its matcher, so enforce auth here too.
+  if (!auth) redirect("/login");
+  const username = auth.session.username;
 
   return (
     <SSEProvider>

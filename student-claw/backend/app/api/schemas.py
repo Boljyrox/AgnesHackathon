@@ -79,6 +79,58 @@ class TaskPatchIn(_StrictIn):
     status: TaskStatus
 
 
+class TaskCreateIn(_StrictIn):
+    title: str = Field(min_length=1, max_length=500)
+    description: Optional[str] = None
+    priority: int = Field(default=2, ge=1, le=3)
+    status: TaskStatus = "pending"
+    assignee_telegram_username: Optional[str] = None
+
+
+# ---- members & overview ---------------------------------------------------
+class MemberOut(BaseModel):
+    studentId: str
+    displayName: str
+    telegramUsername: Optional[str]
+    role: str
+
+
+class OverviewProject(BaseModel):
+    id: str
+    name: str
+    moduleCode: Optional[str]
+    status: str
+    role: str
+    memberCount: int
+
+
+class OverviewDeadline(BaseModel):
+    id: str
+    title: str
+    dueDate: datetime
+    projectId: str
+    projectName: str
+    isConfirmed: bool
+
+
+class OverviewTodo(BaseModel):
+    id: str
+    title: str
+    status: str
+    priority: int
+    projectId: str
+    projectName: str
+
+
+class StudentOverviewOut(BaseModel):
+    displayName: str
+    username: str
+    telegramVerified: bool
+    projects: list[OverviewProject]
+    deadlines: list[OverviewDeadline]
+    todos: list[OverviewTodo]
+
+
 # ---- deadlines ------------------------------------------------------------
 class DeadlineOut(BaseModel):
     id: str

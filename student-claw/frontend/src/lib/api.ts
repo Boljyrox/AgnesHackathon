@@ -48,11 +48,77 @@ export async function fetchProjects(): Promise<ProjectSummary[]> {
   return projects;
 }
 
+export interface OverviewProject {
+  id: string;
+  name: string;
+  moduleCode: string | null;
+  status: string;
+  role: string;
+  memberCount: number;
+}
+export interface OverviewDeadline {
+  id: string;
+  title: string;
+  dueDate: string;
+  projectId: string;
+  projectName: string;
+  isConfirmed: boolean;
+}
+export interface OverviewTodo {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  priority: number;
+  projectId: string;
+  projectName: string;
+}
+export interface Overview {
+  displayName: string;
+  username: string;
+  telegramVerified: boolean;
+  projects: OverviewProject[];
+  deadlines: OverviewDeadline[];
+  todos: OverviewTodo[];
+}
+
+export async function fetchOverview(): Promise<Overview> {
+  return request<Overview>("/api/me/overview");
+}
+
+export interface MemberDto {
+  studentId: string;
+  displayName: string;
+  telegramUsername: string | null;
+  role: string;
+}
+
+export async function fetchMembers(projectId: string): Promise<MemberDto[]> {
+  return request<MemberDto[]>(`/api/projects/${projectId}/members`);
+}
+
 export async function fetchTasks(projectId: string): Promise<Task[]> {
   const { tasks } = await request<{ tasks: Task[] }>(
     `/api/projects/${projectId}/tasks`,
   );
   return tasks;
+}
+
+export interface CreateTaskInput {
+  title: string;
+  description?: string;
+  priority?: number;
+  assignee_telegram_username?: string;
+}
+
+export async function createTask(
+  projectId: string,
+  input: CreateTaskInput,
+): Promise<Task> {
+  return request<Task>(`/api/projects/${projectId}/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 export async function updateTaskStatus(

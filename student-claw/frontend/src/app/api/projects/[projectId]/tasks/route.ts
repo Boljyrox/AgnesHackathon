@@ -14,3 +14,11 @@ export async function GET(
 ) {
   return proxy({ method: "GET", path: backendPath.tasks(params.projectId) });
 }
+
+export async function POST(
+  req: NextRequest,
+  { params }: { params: { projectId: string } },
+) {
+  const body = await req.json().catch(() => ({}));
+  return proxy({ method: "POST", path: backendPath.tasks(params.projectId), body });
+}

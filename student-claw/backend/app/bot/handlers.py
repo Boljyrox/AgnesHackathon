@@ -88,7 +88,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Student Claw commands:\n"
         "/start — show this group's Project Key\n"
         "/verify <token> — link your web account (run inside the group)\n"
-        "/ask <question> — ask Agnes about this project\n"
+        "/ask <question> — ask Agnes anything about this project\n"
+        "/summary — project status briefing\n"
+        "/assign_work [focus] — delegate outstanding tasks to members\n"
+        "/project_goals — state the project's goals\n"
+        "/deadline [name] — list (and capture) deadlines\n"
         "/help — show this help"
     )
 
@@ -366,6 +370,95 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 # ---------------------------------------------------------------------------
+# Structured agent commands (each carries its own Agnes directive)
+# ---------------------------------------------------------------------------
+_SUMMARY_DIRECTIVE = (
+    "The user invoked /summary. Produce a concise project status briefing using "
+    "short bold headings: (1) Recent activity & decisions, (2) Outstanding tasks "
+    "and who owns them, (3) Upcoming deadlines. Base everything strictly on the "
+    "conversation, member roster, and stored context — call search_project_context "
+    "for older details if needed. Never invent. Keep it scannable."
+)
+_ASSIGN_WORK_DIRECTIVE = (
+    "The user invoked /assign_work. Identify concrete outstanding tasks from the "
+    "conversation and delegate each to the most suitable member using the "
+    "delegate_task tool. Choose assignees only from the real roster, based on who "
+    "volunteered, who was assigned, or demonstrated expertise. Set sensible "
+    "priorities and link an existing deadline when relevant. After delegating, "
+    "reply with a short bulleted list of who got what and why. If there is nothing "
+    "concrete to assign, say so rather than inventing work."
+)
+_PROJECT_GOALS_DIRECTIVE = (
+    "The user invoked /project_goals. State this project's goals and objectives "
+    "based on the conversation, module code, and any uploaded documents (use "
+    "search_project_context if helpful). Give 3-6 concise goal bullets. If goals "
+    "were never stated explicitly, infer the most likely objective from context "
+    "and clearly label that section as 'Inferred'."
+)
+_DEADLINE_DIRECTIVE = (
+    "The user invoked /deadline. List all known deadlines for this project sorted "
+    "earliest first, each with its date and what it is for. If the recent "
+    "conversation states a new, unambiguous deadline that isn't recorded yet, "
+    "capture it with the upsert_deadline tool before replying. Never invent dates."
+)
+
+
+async def _run_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    directive: str,
+    default_message: str,
+) -> None:
+    """Shared runner for the structured agent slash-commands."""
+    chat = update.effective_chat
+    msg = update.effective_message
+    if chat is None or chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await msg.reply_text("Run this inside your project group chat.")
+        return
+
+    # Any extra words after the command become additional focus for Agnes.
+    extra = " ".join(context.args).strip() if context.args else ""
+    user_message = f"{default_message} {extra}".strip() if extra else default_message
+
+    await context.bot.send_chat_action(chat_id=chat.id, action="typing")
+    answer = await run_agent(chat.id, user_message, system_directive=directive)
+    await msg.reply_text(answer or "🤔 I couldn't form a response.", parse_mode="HTML")
+
+
+async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_command(
+        update, context,
+        directive=_SUMMARY_DIRECTIVE,
+        default_message="Summarise the current state of this project.",
+    )
+
+
+async def assign_work_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_command(
+        update, context,
+        directive=_ASSIGN_WORK_DIRECTIVE,
+        default_message="Assign the outstanding work for this project to the team.",
+    )
+
+
+async def project_goals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_command(
+        update, context,
+        directive=_PROJECT_GOALS_DIRECTIVE,
+        default_message="What are the goals and objectives of this project?",
+    )
+
+
+async def deadline_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_command(
+        update, context,
+        directive=_DEADLINE_DIRECTIVE,
+        default_message="List all deadlines for this project.",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Handler registration
 # ---------------------------------------------------------------------------
 def register_handlers(application) -> None:
@@ -375,6 +468,10 @@ def register_handlers(application) -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("verify", verify_command))
     application.add_handler(CommandHandler("ask", ask_command))
+    application.add_handler(CommandHandler("summary", summary_command))
+    application.add_handler(CommandHandler("assign_work", assign_work_command))
+    application.add_handler(CommandHandler("project_goals", project_goals_command))
+    application.add_handler(CommandHandler("deadline", deadline_command))
 
     # Bot membership changes (primary join-detection path).
     application.add_handler(
