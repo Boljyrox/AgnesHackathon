@@ -98,7 +98,7 @@ export default function OverviewPage() {
             {data.projects.map((p) => (
               <Link
                 key={p.id}
-                href={`/projects/${p.id}/tasks`}
+                href={`/projects/${p.id}`}
                 className="rounded-2xl border border-slate-200 bg-white p-4 transition-colors hover:border-brand-200 hover:bg-brand-50"
               >
                 <div className="flex items-center justify-between">

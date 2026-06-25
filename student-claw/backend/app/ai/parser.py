@@ -1,10 +1,20 @@
 """
 Multi-modal parsing & OCR (blueprint §5.1).
 
-Pure extraction + normalisation. All heavy, blocking libraries (pytesseract,
-PyMuPDF/fitz, python-pptx, Pillow) are invoked through asyncio.to_thread so the
-event loop is never stalled. File download/storage lives in app.ai.storage; the
-caller hands raw bytes to these extractors.
+Pure extraction + normalisation. All heavy, blocking libraries (PyMuPDF/fitz,
+python-pptx, Pillow) are invoked through asyncio.to_thread so the event loop is
+never stalled. File download/storage lives in app.ai.storage; the caller hands
+raw bytes to these extractors.
+
+VLM pipeline
+────────────
+Images and scanned/image-only PDF pages are processed by Qwen 2.5 VL 72B via
+the OpenRouter API (OpenAI-compatible endpoint).  The model receives a base-64
+data-URI and returns structured text suitable for RAG chunking.
+
+For PDFs, PyMuPDF text extraction is tried first (fast path). Pages that yield
+no selectable text are rendered to high-resolution PNGs and sent to the VLM
+(fallback path).  This covers both text-native and fully-scanned PDFs.
 
 Returned `ParsedContent.segments` preserves natural boundaries (PDF pages /
 PPTX slides) so the chunker can keep slides atomic while recursively splitting
@@ -14,11 +24,19 @@ PDFs.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional
+
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from app.ai.config import MIME_PDF, MIME_PPTX
 
@@ -40,7 +58,7 @@ class ParsedContent:
 # ---------------------------------------------------------------------------
 # Normalisation
 # ---------------------------------------------------------------------------
-_ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍﻿⁠"), None)
+_ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff\u2060"), None)
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _MULTI_WS_RE = re.compile(r"[ \t]{2,}")
 _MULTI_NL_RE = re.compile(r"\n{3,}")
@@ -78,27 +96,104 @@ def detect_language(text: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Image OCR
+# OpenRouter / Qwen 2.5 VL client
 # ---------------------------------------------------------------------------
-def _ocr_image_sync(data: bytes) -> str:
-    from io import BytesIO
+_VLM_SYSTEM_PROMPT = (
+    "You are a data extraction assistant. Extract ALL text visible in the "
+    "image faithfully and completely. Preserve the logical reading order. "
+    "Format tables as pipe-separated Markdown. Preserve numbered lists and "
+    "bullet points. Do NOT add commentary, summaries, or any content not "
+    "present in the image. Output only the extracted text."
+)
 
-    import pytesseract
-    from PIL import Image, UnidentifiedImageError
-
-    try:
-        with Image.open(BytesIO(data)) as img:
-            img = img.convert("RGB")
-            return pytesseract.image_to_string(img)
-    except UnidentifiedImageError as exc:
-        raise ParseError(f"Unrecognised image format: {exc}") from exc
+_VLM_USER_PROMPT = (
+    "Extract all text from this image exactly as described in your instructions."
+)
 
 
+def _build_vlm_client():
+    """Build an async OpenAI-compatible client pointed at OpenRouter."""
+    from openai import AsyncOpenAI
+
+    from app.ai.config import get_ai_settings
+
+    cfg = get_ai_settings()
+    if not cfg.openrouter_api_key:
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is not set. Cannot use VLM extraction."
+        )
+    return AsyncOpenAI(
+        api_key=cfg.openrouter_api_key,
+        base_url=cfg.openrouter_base_url,
+    )
+
+
+@retry(
+    retry=retry_if_exception_type(Exception),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True,
+)
+async def _run_vlm_extraction(image_bytes: bytes, mime: str = "jpeg") -> str:
+    """
+    Send *image_bytes* to Qwen 2.5 VL via OpenRouter and return the extracted
+    text string.  Retried up to 3 times with exponential back-off.
+
+    Args:
+        image_bytes: Raw image bytes (PNG, JPEG, …).
+        mime: Image MIME sub-type without the "image/" prefix (default "jpeg").
+              Pass "png" for PNG images.
+    """
+    from app.ai.config import get_ai_settings
+
+    cfg = get_ai_settings()
+    client = _build_vlm_client()
+
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    data_uri = f"data:image/{mime};base64,{b64}"
+
+    response = await client.chat.completions.create(
+        model=cfg.openrouter_model,
+        messages=[
+            {"role": "system", "content": _VLM_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": data_uri},
+                    },
+                    {"type": "text", "text": _VLM_USER_PROMPT},
+                ],
+            },
+        ],
+        max_tokens=4096,
+        temperature=0.0,
+    )
+    return (response.choices[0].message.content or "").strip()
+
+
+# ---------------------------------------------------------------------------
+# Image extraction (VLM)
+# ---------------------------------------------------------------------------
 async def extract_text_from_image(data: bytes) -> ParsedContent:
-    raw = await asyncio.to_thread(_ocr_image_sync, data)
-    text = normalize_text(raw)
+    """
+    Extract text from an image using the Qwen 2.5 VL 72B VLM via OpenRouter.
+    Falls back to an empty result rather than raising so that ingestion can
+    continue even if the VLM is temporarily unavailable.
+    """
+    # Detect PNG vs JPEG by magic bytes so we pass the right MIME to the model.
+    mime = "png" if data[:4] == b"\x89PNG" else "jpeg"
+    try:
+        raw = await _run_vlm_extraction(data, mime=mime)
+        text = normalize_text(raw)
+    except Exception as exc:  # pragma: no cover – network / quota failures
+        logger.error("VLM extraction failed for image (%d bytes): %s", len(data), exc)
+        text = ""
+
     if not text:
-        logger.info("OCR produced no text for image (%d bytes).", len(data))
+        logger.info("VLM produced no text for image (%d bytes).", len(data))
+
     return ParsedContent(
         text=text,
         segments=[text] if text else [],
@@ -108,9 +203,10 @@ async def extract_text_from_image(data: bytes) -> ParsedContent:
 
 
 # ---------------------------------------------------------------------------
-# PDF (PyMuPDF / fitz)
+# PDF (PyMuPDF / fitz) — text-native fast-path + VLM scanned-page fallback
 # ---------------------------------------------------------------------------
 def _pdf_pages_sync(data: bytes) -> list[str]:
+    """Extract selectable text from each PDF page (fast path)."""
     import fitz  # PyMuPDF
 
     try:
@@ -131,7 +227,7 @@ def _pdf_pages_sync(data: bytes) -> list[str]:
 
 
 def _pdf_pages_to_pngs_sync(data: bytes, max_pages: int, zoom: float = 2.0) -> list[bytes]:
-    """Render the first `max_pages` PDF pages to PNG bytes (for vision fallback)."""
+    """Render the first `max_pages` PDF pages to PNG bytes (for VLM fallback)."""
     import fitz  # PyMuPDF
 
     try:
@@ -155,8 +251,46 @@ async def render_pdf_pages_to_images(data: bytes, max_pages: int = 5) -> list[by
 
 
 async def extract_text_from_pdf(data: bytes) -> ParsedContent:
+    """
+    Extract text from a PDF.
+
+    Strategy:
+    1. Try PyMuPDF text extraction on every page (fast, no API cost).
+    2. For pages that yield no selectable text (scanned / image-only), render
+       the page to a high-resolution PNG and send it to the VLM.
+    3. Concatenate results, preserving page order.
+    """
     raw_pages = await asyncio.to_thread(_pdf_pages_sync, data)
-    pages = [normalize_text(p) for p in raw_pages]
+    pages: list[str] = []
+
+    for page_idx, raw in enumerate(raw_pages):
+        normalised = normalize_text(raw)
+        if normalised:
+            # Fast path: selectable text found.
+            pages.append(normalised)
+            continue
+
+        # Fallback: render this page and run VLM OCR.
+        logger.info(
+            "PDF page %d has no selectable text — attempting VLM OCR.", page_idx + 1
+        )
+        try:
+            png_list = await asyncio.to_thread(
+                _pdf_pages_to_pngs_sync, data, max_pages=page_idx + 1, zoom=2.0
+            )
+            if png_list:
+                page_png = png_list[-1]  # the page we just rendered
+                vlm_text = await _run_vlm_extraction(page_png, mime="png")
+                vlm_text = normalize_text(vlm_text)
+                pages.append(vlm_text)
+            else:
+                pages.append("")
+        except Exception as exc:
+            logger.error(
+                "VLM fallback failed for PDF page %d: %s", page_idx + 1, exc
+            )
+            pages.append("")
+
     pages = [p for p in pages if p]
     full = "\n\n".join(pages)
     if not full:

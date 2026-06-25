@@ -8,6 +8,7 @@ so cross-project access is impossible even with a forged project id.
 
 from __future__ import annotations
 
+import hmac
 import uuid
 from typing import Optional
 
@@ -16,9 +17,19 @@ from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_admin_token
 from app.core.security import decode_access_token
 from app.database.connection import get_session
 from app.database.models import Project, Student, StudentProject
+
+
+async def require_admin(
+    x_admin_token: Optional[str] = Header(default=None),
+) -> None:
+    """Gate SUTD_Admin endpoints behind a shared admin token (constant-time)."""
+    expected = get_admin_token()
+    if not expected or not x_admin_token or not hmac.compare_digest(x_admin_token, expected):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required.")
 
 
 async def db_session() -> AsyncSession:  # pragma: no cover - thin wrapper

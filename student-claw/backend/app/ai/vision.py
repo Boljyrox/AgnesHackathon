@@ -15,6 +15,7 @@ import logging
 
 from app.ai.clients import get_agnes_client
 from app.ai.config import get_ai_settings
+from app.ai.observability import logged_chat
 
 logger = logging.getLogger("student_claw.ai.vision")
 
@@ -38,7 +39,11 @@ def _data_url(data: bytes, mime: str) -> str:
 
 
 async def describe_image(
-    data: bytes, mime: str = "image/jpeg", prompt: str | None = None
+    data: bytes,
+    mime: str = "image/jpeg",
+    prompt: str | None = None,
+    *,
+    chat_id: int | None = None,
 ) -> str:
     """
     Send an image to the Agnes vision model and return the extracted text +
@@ -47,8 +52,11 @@ async def describe_image(
     client = get_agnes_client()
     model = get_ai_settings().vision_model
     try:
-        resp = await client.chat.completions.create(
+        resp = await logged_chat(
+            client,
             model=model,
+            kind="vision",
+            chat_id=chat_id,
             temperature=0.0,
             messages=[
                 {

@@ -17,9 +17,18 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from telegram import Chat, ChatMemberUpdated, Update
+import random
+
+from telegram import (
+    Chat,
+    ChatMemberUpdated,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.constants import ChatType
 from telegram.ext import (
+    CallbackQueryHandler,
     ChatMemberHandler,
     CommandHandler,
     ContextTypes,
@@ -27,11 +36,11 @@ from telegram.ext import (
     filters,
 )
 
-from app.ai import queue, storage
+from app.ai import pipeline, queue, storage
 from app.ai.agent import run_agent
 from app.bot import events, services
 from app.bot.config import MAX_FILE_SIZE_BYTES
-from app.database.models import ContentType
+from app.database.models import ContentType, ProjectStatus
 
 logger = logging.getLogger("student_claw.bot.handlers")
 
@@ -93,6 +102,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/assign_work [focus] — delegate outstanding tasks to members\n"
         "/project_goals — state the project's goals\n"
         "/deadline [name] — list (and capture) deadlines\n"
+        "/change_details — menu to edit goals, deadlines or tasks\n"
+        "/setgoals <text> — set the project goals\n"
+        "/status — set project status (upcoming/active/completed)\n"
+        "/clear — wipe the project's vector memory\n"
+        "/celebrate — end-of-project wrap-up 🎉\n"
+        "/hehe — a joke to cheer the team up\n"
         "/help — show this help"
     )
 
@@ -348,10 +363,70 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 # ---------------------------------------------------------------------------
-# /ask — invoke the Agnes agent
+# /ask — invoke the Agnes agent (deferred "Thinking…" pattern, Requirement 2)
 # ---------------------------------------------------------------------------
+async def _deferred_agent(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_message: str,
+    system_directive: str | None = None,
+) -> None:
+    """
+    Reply with an immediate "🤔 Thinking…" placeholder, run the agent in a
+    background task (so the webhook returns within Telegram's 10s window), then
+    edit the placeholder with the final answer. The agent itself handles the
+    OpenRouter/Gemini fallback (Requirement 2).
+    """
+    chat = update.effective_chat
+    msg = update.effective_message
+    sender = update.effective_user
+    assert chat is not None and msg is not None
+
+    placeholder = await msg.reply_text("🤔 Thinking…")
+
+    async def _work() -> None:
+        try:
+            answer = await run_agent(chat.id, user_message, system_directive=system_directive)
+        except Exception as exc:  # run_agent already guards; defend anyway
+            logger.exception("Agent crashed in deferred task: %s", exc)
+            answer = "⚠️ Something went wrong. Please try again."
+
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat.id, message_id=placeholder.message_id,
+                text=answer, parse_mode="HTML",
+            )
+        except Exception as exc:
+            # Most likely a Telegram HTML-parse rejection — retry as plain text.
+            logger.warning("edit_message_text (HTML) failed: %s", exc)
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat.id, message_id=placeholder.message_id,
+                    text=services._strip_html(answer) or "(no response)",
+                )
+            except Exception as exc2:
+                logger.error("edit_message_text (plain) failed: %s", exc2)
+
+        # Persist the Q&A turn so the agent remembers it next time.
+        try:
+            await services.log_agent_interaction(
+                chat_id=chat.id,
+                asker_username=sender.username if sender else None,
+                asker_user_id=sender.id if sender else None,
+                question=user_message,
+                answer=answer,
+                q_message_id=msg.message_id,
+                a_message_id=placeholder.message_id,
+            )
+        except Exception as exc:
+            logger.warning("Failed to log agent interaction: %s", exc)
+
+    context.application.create_task(_work(), update=update)
+
+
 async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Run the bounded agentic loop on the user's question and reply in HTML."""
+    """Run the bounded agentic loop on the user's question (deferred reply)."""
     chat = update.effective_chat
     msg = update.effective_message
 
@@ -364,9 +439,7 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await msg.reply_text("Usage: /ask <your question about the project>")
         return
 
-    await context.bot.send_chat_action(chat_id=chat.id, action="typing")
-    answer = await run_agent(chat.id, question)
-    await msg.reply_text(answer or "🤔 I couldn't form a response.", parse_mode="HTML")
+    await _deferred_agent(update, context, user_message=question)
 
 
 # ---------------------------------------------------------------------------
@@ -421,9 +494,7 @@ async def _run_command(
     extra = " ".join(context.args).strip() if context.args else ""
     user_message = f"{default_message} {extra}".strip() if extra else default_message
 
-    await context.bot.send_chat_action(chat_id=chat.id, action="typing")
-    answer = await run_agent(chat.id, user_message, system_directive=directive)
-    await msg.reply_text(answer or "🤔 I couldn't form a response.", parse_mode="HTML")
+    await _deferred_agent(update, context, user_message=user_message, system_directive=directive)
 
 
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -459,6 +530,235 @@ async def deadline_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 # ---------------------------------------------------------------------------
+# Interactive commands & menus (Requirement 4)
+# ---------------------------------------------------------------------------
+_CELEBRATE_DIRECTIVE = (
+    "The user invoked /celebrate — the project is complete. Write a warm, "
+    "celebratory end-of-project wrap-up in Telegram HTML with emojis: "
+    "congratulate the team, summarise what was accomplished (the completed "
+    "tasks), gently acknowledge anything left undone, and thank everyone. Keep "
+    "it upbeat and concise. Base it strictly on the task ledger provided."
+)
+
+_JOKES = [
+    "Why do programmers prefer dark mode? Because light attracts bugs. 🐛",
+    "There are only 10 kinds of people: those who understand binary and those who don't.",
+    "A SQL query walks into a bar, walks up to two tables and asks: 'Can I JOIN you?' 🍻",
+    "I'd tell you a UDP joke, but you might not get it.",
+    "Student life: 8 cups of coffee, 0 commits, infinite vibes. ☕",
+    "Why was the function sad after the party? It didn't get called. 📞",
+    "My code doesn't work, I have no idea why. My code works, I have no idea why. 🤷",
+    "It's not a bug — it's an undocumented feature. ✨",
+    "Deadlines are just suggestions delivered with anxiety. 🗓️",
+    "Git commit -m 'final'. Git commit -m 'final FINAL'. Git commit -m 'final for real'. 😅",
+]
+
+
+def _is_group(chat: Chat | None) -> bool:
+    return chat is not None and chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
+
+
+async def change_details_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_group(update.effective_chat):
+        await update.effective_message.reply_text("Use this inside your project group chat.")
+        return
+    keyboard = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🎯 Edit Goals", callback_data="cd:goals")],
+            [InlineKeyboardButton("📅 Deadlines", callback_data="cd:deadlines")],
+            [InlineKeyboardButton("✅ Assign Tasks", callback_data="cd:tasks")],
+        ]
+    )
+    await update.effective_message.reply_text(
+        "What would you like to change?", reply_markup=keyboard
+    )
+
+
+async def setgoals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    msg = update.effective_message
+    if not _is_group(chat):
+        await msg.reply_text("Use this inside your project group chat.")
+        return
+    goals = " ".join(context.args).strip() if context.args else ""
+    if not goals:
+        await msg.reply_text("Usage: /setgoals <your project goals>")
+        return
+    ok = await services.update_project_goals(chat.id, goals)
+    await msg.reply_text(
+        "🎯 Project goals updated." if ok else "⚠️ This group isn't registered yet."
+    )
+
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_group(update.effective_chat):
+        await update.effective_message.reply_text("Use this inside your project group chat.")
+        return
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🕒 Upcoming", callback_data="st:upcoming"),
+                InlineKeyboardButton("⚡ Active", callback_data="st:active"),
+                InlineKeyboardButton("✅ Completed", callback_data="st:completed"),
+            ]
+        ]
+    )
+    await update.effective_message.reply_text(
+        "Set the project status:", reply_markup=keyboard
+    )
+
+
+async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_group(update.effective_chat):
+        await update.effective_message.reply_text("Use this inside your project group chat.")
+        return
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🗑️ Yes, clear", callback_data="clr:yes"),
+                InlineKeyboardButton("Cancel", callback_data="clr:no"),
+            ]
+        ]
+    )
+    await update.effective_message.reply_text(
+        "⚠️ Clear this project's vector memory? Files are kept, but Agnes's "
+        "recall of past chat/documents is wiped. This can't be undone.",
+        reply_markup=keyboard,
+    )
+
+
+async def celebrate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    msg = update.effective_message
+    if not _is_group(chat):
+        await msg.reply_text("Use this inside your project group chat.")
+        return
+
+    ledger = await services.get_task_ledger(chat.id)
+    if ledger is None:
+        await msg.reply_text("⚠️ This group isn't registered yet.")
+        return
+
+    # Mark the project completed, then let Agnes write the celebration.
+    await services.set_project_status(chat.id, ProjectStatus.completed)
+
+    def _block(title: str, items: list[str]) -> str:
+        body = "\n".join(f"- {t}" for t in items) or "(none)"
+        return f"{title}:\n{body}"
+
+    ledger_text = (
+        _block("Completed", ledger["completed"])
+        + "\n\n"
+        + _block("Outstanding", ledger["outstanding"])
+        + "\n\n"
+        + _block("Dropped", ledger["dropped"])
+    )
+    user_message = (
+        "The project is wrapping up. Here is the final task ledger:\n"
+        f"{ledger_text}\n\nWrite the celebration message now."
+    )
+    await _deferred_agent(update, context, user_message=user_message, system_directive=_CELEBRATE_DIRECTIVE)
+
+
+async def hehe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(random.choice(_JOKES))
+
+
+# ---------------------------------------------------------------------------
+# Inline-button callback router
+# ---------------------------------------------------------------------------
+_STATUS_LABELS = {
+    "upcoming": "🕒 Upcoming",
+    "active": "⚡ Active",
+    "completed": "✅ Completed",
+}
+
+
+async def on_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    data = query.data or ""
+    chat = update.effective_chat
+    if chat is None:
+        return
+
+    # ---- /status ----
+    if data.startswith("st:"):
+        value = data.split(":", 1)[1]
+        try:
+            status = ProjectStatus(value)
+        except ValueError:
+            return
+        ok = await services.set_project_status(chat.id, status)
+        await query.edit_message_text(
+            f"Project status set to <b>{_STATUS_LABELS.get(value, value)}</b>."
+            if ok
+            else "⚠️ This group isn't registered yet.",
+            parse_mode="HTML",
+        )
+        return
+
+    # ---- /clear ----
+    if data.startswith("clr:"):
+        if data == "clr:no":
+            await query.edit_message_text("Cancelled — nothing was cleared.")
+            return
+        project_id = await services.resolve_project_id(chat.id)
+        if project_id is None:
+            await query.edit_message_text("⚠️ This group isn't registered yet.")
+            return
+        await query.edit_message_text("🧹 Clearing vector memory…")
+        try:
+            result = await pipeline.clear_project_cache(project_id, include_files=False)
+            await query.edit_message_text(
+                f"🧹 Vector memory cleared — {result.messages_soft_deleted} messages "
+                "archived. Files were kept."
+            )
+        except Exception as exc:
+            logger.error("clear cache failed: %s", exc)
+            await query.edit_message_text("⚠️ Couldn't clear the cache. Please try again.")
+        return
+
+    # ---- /change_details ----
+    if data.startswith("cd:"):
+        action = data.split(":", 1)[1]
+        if action == "goals":
+            exists, goals = await services.get_project_goals(chat.id)
+            if not exists:
+                await query.edit_message_text("⚠️ This group isn't registered yet.")
+                return
+            current = goals or "(none set)"
+            await query.edit_message_text(
+                "🎯 To update the goals, send:\n"
+                "<code>/setgoals your goals here</code>\n\n"
+                f"<b>Current goals:</b>\n{_md_escape_min(current)}",
+                parse_mode="HTML",
+            )
+        elif action == "deadlines":
+            await query.edit_message_text("📅 Fetching deadlines…")
+            await _deferred_agent(
+                update, context,
+                user_message="List all deadlines for this project.",
+                system_directive=_DEADLINE_DIRECTIVE,
+            )
+        elif action == "tasks":
+            await query.edit_message_text("✅ Reviewing work to assign…")
+            await _deferred_agent(
+                update, context,
+                user_message="Assign the outstanding work for this project to the team.",
+                system_directive=_ASSIGN_WORK_DIRECTIVE,
+            )
+        return
+
+
+def _md_escape_min(text: str) -> str:
+    """Minimal HTML escaping for user-provided goals shown in an HTML message."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+# ---------------------------------------------------------------------------
 # Handler registration
 # ---------------------------------------------------------------------------
 def register_handlers(application) -> None:
@@ -472,6 +772,15 @@ def register_handlers(application) -> None:
     application.add_handler(CommandHandler("assign_work", assign_work_command))
     application.add_handler(CommandHandler("project_goals", project_goals_command))
     application.add_handler(CommandHandler("deadline", deadline_command))
+
+    # Requirement 4 — interactive commands & menus.
+    application.add_handler(CommandHandler("change_details", change_details_command))
+    application.add_handler(CommandHandler("setgoals", setgoals_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("clear", clear_command))
+    application.add_handler(CommandHandler("celebrate", celebrate_command))
+    application.add_handler(CommandHandler("hehe", hehe_command))
+    application.add_handler(CallbackQueryHandler(on_callback_query))
 
     # Bot membership changes (primary join-detection path).
     application.add_handler(

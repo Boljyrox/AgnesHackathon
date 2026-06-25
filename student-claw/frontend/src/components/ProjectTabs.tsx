@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 
-type Tab = "tasks" | "members" | "context";
+type Tab = "overview" | "tasks" | "members" | "context";
 
 const TABS: { key: Tab; label: string; href: (id: string) => string }[] = [
+  { key: "overview", label: "Overview", href: (id) => `/projects/${id}` },
   { key: "tasks", label: "Tasks", href: (id) => `/projects/${id}/tasks` },
   { key: "members", label: "Members", href: (id) => `/projects/${id}/members` },
   { key: "context", label: "Ask Agnes", href: (id) => `/projects/${id}/context` },

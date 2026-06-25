@@ -13,9 +13,12 @@ from app.api.schemas import (
     AskIn,
     AskOut,
     MemberOut,
+    ProjectDetailOut,
+    ProjectGoalsIn,
     ProjectLinkIn,
     ProjectOut,
 )
+from sqlalchemy import func
 from app.database.models import Project, ProjectLinkToken, Student, StudentProject, Task
 from app.database.queries import get_project_members
 
@@ -127,6 +130,60 @@ async def list_tasks(
             for t in tasks
         ]
     }
+
+
+async def _member_count(session: AsyncSession, project_id) -> int:
+    return int(
+        await session.scalar(
+            select(func.count()).select_from(StudentProject).where(
+                StudentProject.project_id == project_id
+            )
+        )
+        or 0
+    )
+
+
+@router.get("/{project_id}", response_model=ProjectDetailOut)
+async def get_project(
+    project_id: str,
+    student: Student = Depends(get_current_student),
+    session: AsyncSession = Depends(db_session),
+) -> ProjectDetailOut:
+    project = await resolve_project(project_id, session)
+    membership = await require_membership(project, student, session)
+    return ProjectDetailOut(
+        id=str(project.id),
+        name=project.name,
+        module_code=project.module_code,
+        status=project.status.value,
+        role=membership.role.value,
+        memberCount=await _member_count(session, project.id),
+        goals=project.goals,
+    )
+
+
+@router.patch("/{project_id}", response_model=ProjectDetailOut)
+async def update_project_goals(
+    project_id: str,
+    body: ProjectGoalsIn,
+    student: Student = Depends(get_current_student),
+    session: AsyncSession = Depends(db_session),
+) -> ProjectDetailOut:
+    """Edit the project's goals (any member may update)."""
+    project = await resolve_project(project_id, session)
+    membership = await require_membership(project, student, session)
+    project.goals = (body.goals or "").strip() or None
+    await session.commit()
+    await session.refresh(project)
+    return ProjectDetailOut(
+        id=str(project.id),
+        name=project.name,
+        module_code=project.module_code,
+        status=project.status.value,
+        role=membership.role.value,
+        memberCount=await _member_count(session, project.id),
+        goals=project.goals,
+    )
 
 
 @router.get("/{project_id}/members", response_model=list[MemberOut])

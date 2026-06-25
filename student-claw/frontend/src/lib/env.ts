@@ -51,6 +51,18 @@ export const OAUTH_COOKIE_SECRET =
 export const OAUTH_COOKIE_NAME = "g_oauth";
 export const OAUTH_STATE_TTL_SECONDS = 10 * 60; // 10 minutes
 
+// ---- SUTD_Admin dashboard (Requirement 1) ----
+/** Shared admin token (must match the FastAPI ADMIN_API_TOKEN). Server-only. */
+export const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN ?? "";
+export const ADMIN_COOKIE_NAME = "sutd_admin";
+export const ADMIN_COOKIE_TTL_SECONDS = 8 * 60 * 60; // 8 hours
+
+export const adminBackendPath = {
+  aiLogs: () => `/admin/ai-logs`,
+  collections: () => `/admin/qdrant/collections`,
+  points: (chatId: string) => `/admin/qdrant/${chatId}/points`,
+} as const;
+
 /** Downstream FastAPI endpoint paths (BFF → backend mapping). */
 export const BACKEND_ROUTES = {
   login: "/auth/login",
@@ -64,6 +76,7 @@ export const BACKEND_ROUTES = {
 /** Parameterised backend paths for project sub-resources. */
 export const backendPath = {
   overview: () => `/me/overview`,
+  project: (projectId: string) => `/projects/${projectId}`,
   tasks: (projectId: string) => `/projects/${projectId}/tasks`,
   task: (projectId: string, taskId: string) =>
     `/projects/${projectId}/tasks/${taskId}`,

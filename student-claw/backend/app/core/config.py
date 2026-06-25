@@ -45,3 +45,8 @@ def get_web_settings() -> WebSettings:
         google_client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
         google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
     )
+
+
+def get_admin_token() -> str:
+    """Shared secret gating the SUTD_Admin diagnostic dashboard."""
+    return os.getenv("ADMIN_API_TOKEN", "")

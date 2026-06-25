@@ -26,9 +26,9 @@ redis>=5.0
 # Multi-modal parsing / OCR
 PyMuPDF>=1.24            # PDF text extraction (imported as `fitz`)
 python-pptx>=0.6        # PPTX slide extraction
-pytesseract>=0.3        # OCR (requires the Tesseract binary — see README)
 Pillow>=10.0
 langdetect>=1.0.9
+tenacity>=8.2            # Retry logic for VLM API calls
 
 # Auth / crypto / HTTP
 bcrypt>=4.1

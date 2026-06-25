@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import (
+    AIRequestLog,
     ContributionMetric,
     Deadline,
     MessageLog,
@@ -24,6 +25,43 @@ from app.database.models import (
     Task,
     TaskStatus,
 )
+
+
+async def get_ai_request_logs(
+    session: AsyncSession,
+    *,
+    chat_id: int | None = None,
+    kind: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Most recent Agnes AI call logs (newest first), optionally filtered."""
+    stmt = select(AIRequestLog).order_by(AIRequestLog.created_at.desc())
+    if chat_id is not None:
+        stmt = stmt.where(AIRequestLog.chat_id == chat_id)
+    if kind:
+        stmt = stmt.where(AIRequestLog.kind == kind)
+    stmt = stmt.limit(min(limit, 500)).offset(offset)
+
+    rows = (await session.scalars(stmt)).all()
+    return [
+        {
+            "id": str(r.id),
+            "createdAt": r.created_at,
+            "chatId": r.chat_id,
+            "kind": r.kind,
+            "model": r.model,
+            "status": r.status,
+            "latencyMs": r.latency_ms,
+            "requestSummary": r.request_summary,
+            "responseSummary": r.response_summary,
+            "requestPayload": r.request_payload,
+            "responsePayload": r.response_payload,
+            "error": r.error,
+            "totalTokens": r.total_tokens,
+        }
+        for r in rows
+    ]
 
 
 async def get_project_members(

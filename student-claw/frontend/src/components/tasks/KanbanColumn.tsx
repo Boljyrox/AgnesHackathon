@@ -6,6 +6,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 
 import { TaskCard } from "@/components/tasks/TaskCard";
+import type { MemberDto } from "@/lib/api";
 import type { Task, TaskStatus } from "@/lib/domain";
 
 export function KanbanColumn({
@@ -13,11 +14,15 @@ export function KanbanColumn({
   label,
   accent,
   tasks,
+  projectId,
+  members,
 }: {
   status: TaskStatus;
   label: string;
   accent: string;
   tasks: Task[];
+  projectId: string;
+  members: MemberDto[];
 }) {
   // The column itself is a droppable so empty columns still accept drops.
   const { setNodeRef, isOver } = useDroppable({ id: status });
@@ -46,7 +51,7 @@ export function KanbanColumn({
           }`}
         >
           {tasks.map((task) => (
-            <TaskCard key={task.id} task={task} />
+            <TaskCard key={task.id} task={task} projectId={projectId} members={members} />
           ))}
 
           {tasks.length === 0 && (

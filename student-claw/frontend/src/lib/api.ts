@@ -133,6 +133,44 @@ export async function updateTaskStatus(
   });
 }
 
+export async function updateTaskAssignee(
+  projectId: string,
+  taskId: string,
+  telegramUsername: string | null,
+): Promise<Task> {
+  return request<Task>(`/api/projects/${projectId}/tasks/${taskId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    // null clears the assignee; notify:true announces it in the Telegram group.
+    body: JSON.stringify({ assignee_telegram_username: telegramUsername, notify: true }),
+  });
+}
+
+export interface ProjectDetail {
+  id: string;
+  name: string;
+  module_code: string | null;
+  status: string;
+  role: string;
+  memberCount: number;
+  goals: string | null;
+}
+
+export async function fetchProject(projectId: string): Promise<ProjectDetail> {
+  return request<ProjectDetail>(`/api/projects/${projectId}`);
+}
+
+export async function updateProjectGoals(
+  projectId: string,
+  goals: string,
+): Promise<ProjectDetail> {
+  return request<ProjectDetail>(`/api/projects/${projectId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ goals }),
+  });
+}
+
 export interface AgentAnswer {
   /** Telegram-HTML formatted answer from Agnes. */
   answer_html: string;

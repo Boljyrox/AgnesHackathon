@@ -98,7 +98,7 @@ export function Sidebar({ username = "You" }: { username?: string }) {
 
           <ul className="space-y-1">
             {projects?.map((p) => {
-              const href = `/projects/${p.id}/tasks`;
+              const href = `/projects/${p.id}`;
               const active = pathname?.startsWith(`/projects/${p.id}`);
               return (
                 <li key={p.id}>

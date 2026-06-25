@@ -35,6 +35,7 @@ from app.ai.chunking import (
     chunk_pptx_slides,
 )
 from app.ai.clients import get_agnes_client, get_qdrant_client
+from app.ai.observability import logged_embeddings
 from app.ai.config import (
     EMBED_BATCH_SIZE,
     MIME_PPTX,
@@ -75,7 +76,9 @@ async def ensure_collection(chat_id: int) -> str:
 # ---------------------------------------------------------------------------
 # Embeddings
 # ---------------------------------------------------------------------------
-async def embed_texts(texts: list[str]) -> list[list[float]]:
+async def embed_texts(
+    texts: list[str], *, chat_id: Optional[int] = None
+) -> list[list[float]]:
     """Embed texts in batches of <=20 via the Agnes AI /embeddings endpoint."""
     if not texts:
         return []
@@ -84,7 +87,7 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
     vectors: list[list[float]] = []
     for start in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[start : start + EMBED_BATCH_SIZE]
-        resp = await client.embeddings.create(model=model, input=batch)
+        resp = await logged_embeddings(client, model=model, input=batch, chat_id=chat_id)
         # Preserve request order.
         ordered = sorted(resp.data, key=lambda d: d.index)
         vectors.extend(d.embedding for d in ordered)
@@ -120,7 +123,9 @@ async def _resolve_text_and_chunks(
         text = msg.extracted_text
         if not text:
             data = await storage.fetch_bytes(msg.file_storage_path)
-            text = await _understand_image(data, msg.file_mime_type or "image/jpeg")
+            text = await _understand_image(
+                data, msg.file_mime_type or "image/jpeg", chat_id=msg.chat_id
+            )
             if text:
                 await repository.save_extracted_text(msg.id, text)
         if not text:
@@ -138,7 +143,7 @@ async def _resolve_text_and_chunks(
 
         # Scanned / image-only PDF: PyMuPDF found little text → fall back to vision.
         if not is_pptx and len(parsed.text) < 40:
-            vision_text = await _understand_pdf_via_vision(data)
+            vision_text = await _understand_pdf_via_vision(data, chat_id=msg.chat_id)
             if vision_text:
                 parsed.text = vision_text
 
@@ -157,10 +162,10 @@ def _basename(path: Optional[str]) -> Optional[str]:
     return path.rsplit("/", 1)[-1] if path else None
 
 
-async def _understand_image(data: bytes, mime: str) -> str:
+async def _understand_image(data: bytes, mime: str, *, chat_id: Optional[int] = None) -> str:
     """Agnes vision (primary) with Tesseract OCR fallback."""
     try:
-        text = await vision.describe_image(data, mime)
+        text = await vision.describe_image(data, mime, chat_id=chat_id)
         if text:
             return parser.normalize_text(text)
     except vision.VisionError as exc:
@@ -173,7 +178,9 @@ async def _understand_image(data: bytes, mime: str) -> str:
         return ""
 
 
-async def _understand_pdf_via_vision(data: bytes, max_pages: int = 5) -> str:
+async def _understand_pdf_via_vision(
+    data: bytes, max_pages: int = 5, *, chat_id: Optional[int] = None
+) -> str:
     """Render image-only PDF pages and read each with the vision model."""
     try:
         pages = await parser.render_pdf_pages_to_images(data, max_pages=max_pages)
@@ -183,7 +190,7 @@ async def _understand_pdf_via_vision(data: bytes, max_pages: int = 5) -> str:
     out: list[str] = []
     for i, png in enumerate(pages):
         try:
-            text = await vision.describe_image(png, "image/png")
+            text = await vision.describe_image(png, "image/png", chat_id=chat_id)
             if text:
                 out.append(parser.normalize_text(text))
         except vision.VisionError as exc:
@@ -210,7 +217,7 @@ async def vectorize_message(message_log_id: str) -> int:
         return 0
 
     texts = [c.text for c in prepared.chunks]
-    vectors = await embed_texts(texts)
+    vectors = await embed_texts(texts, chat_id=msg.chat_id)
     if len(vectors) != len(texts):
         raise RuntimeError(
             f"Embedding count mismatch: {len(vectors)} vs {len(texts)} chunks."
@@ -274,7 +281,7 @@ async def reindex_chat(chat_id: int) -> int:
     if not windows:
         return 0
 
-    vectors = await embed_texts([w.text for w in windows])
+    vectors = await embed_texts([w.text for w in windows], chat_id=chat_id)
     name = await ensure_collection(chat_id)
     points: list[qmodels.PointStruct] = []
     for window, vector in zip(windows, vectors):
@@ -329,7 +336,7 @@ async def semantic_search(
     if not await client.collection_exists(name):
         return []
 
-    query_vec = (await embed_texts([query]))[0]
+    query_vec = (await embed_texts([query], chat_id=chat_id))[0]
 
     query_filter = None
     if content_type_filter and content_type_filter != "all":

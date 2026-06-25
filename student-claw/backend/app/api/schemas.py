@@ -76,7 +76,26 @@ class TaskOut(BaseModel):
 
 
 class TaskPatchIn(_StrictIn):
-    status: TaskStatus
+    # Both optional — send either or both. Use model_fields_set to tell whether
+    # a field was provided (so assignee can be explicitly cleared with null).
+    status: Optional[TaskStatus] = None
+    assignee_telegram_username: Optional[str] = None
+    # Whether the bot should announce a manual (re)assignment in the group.
+    notify: bool = True
+
+
+class ProjectDetailOut(BaseModel):
+    id: str
+    name: str
+    module_code: Optional[str]
+    status: str
+    role: str
+    memberCount: int
+    goals: Optional[str]
+
+
+class ProjectGoalsIn(_StrictIn):
+    goals: Optional[str] = Field(default=None, max_length=4000)
 
 
 class TaskCreateIn(_StrictIn):

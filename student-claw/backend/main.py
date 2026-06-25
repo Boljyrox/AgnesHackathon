@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routers import (
+    admin,
     auth,
     cache,
     contributions,
@@ -92,6 +93,7 @@ app.include_router(deadlines.router)
 app.include_router(cache.router)
 app.include_router(contributions.router)
 app.include_router(students.router)
+app.include_router(admin.router)
 
 # Telegram webhook (Module 2). Imported lazily-safe at module load.
 try:

@@ -4,8 +4,10 @@
 
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { Avatar } from "@/components/ui/Avatar";
+import { updateTaskAssignee, type MemberDto } from "@/lib/api";
 import { PRIORITY_META, type Task } from "@/lib/domain";
 
 export function PriorityBadge({ priority }: { priority: Task["priority"] }) {
@@ -50,7 +52,15 @@ export function TaskCardContent({ task }: { task: Task }) {
   );
 }
 
-export function TaskCard({ task }: { task: Task }) {
+export function TaskCard({
+  task,
+  projectId,
+  members,
+}: {
+  task: Task;
+  projectId: string;
+  members: MemberDto[];
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: task.id, data: { status: task.status } });
 
@@ -71,6 +81,49 @@ export function TaskCard({ task }: { task: Task }) {
       aria-roledescription="Draggable task"
     >
       <TaskCardContent task={task} />
+      <AssigneeSelect task={task} projectId={projectId} members={members} />
     </li>
+  );
+}
+
+function AssigneeSelect({
+  task,
+  projectId,
+  members,
+}: {
+  task: Task;
+  projectId: string;
+  members: MemberDto[];
+}) {
+  const queryClient = useQueryClient();
+  const current = task.assignee?.telegramUsername ?? "";
+
+  const reassign = useMutation({
+    mutationFn: (username: string) =>
+      updateTaskAssignee(projectId, task.id, username || null),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["overview"] });
+    },
+  });
+
+  return (
+    <select
+      value={current}
+      disabled={reassign.isPending}
+      // Stop the drag sensor from hijacking the dropdown interaction.
+      onPointerDown={(e) => e.stopPropagation()}
+      onChange={(e) => reassign.mutate(e.target.value)}
+      aria-label="Assign task"
+      className="mt-2 w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 outline-none focus:border-brand-400"
+    >
+      <option value="">Unassigned</option>
+      {members.map((m) => (
+        <option key={m.studentId} value={m.telegramUsername ?? ""} disabled={!m.telegramUsername}>
+          {m.displayName}
+          {m.telegramUsername ? "" : " (no telegram)"}
+        </option>
+      ))}
+    </select>
   );
 }

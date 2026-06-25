@@ -29,7 +29,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { KanbanColumn } from "@/components/tasks/KanbanColumn";
 import { TaskCardContent } from "@/components/tasks/TaskCard";
-import { createTask, fetchTasks, updateTaskStatus } from "@/lib/api";
+import { createTask, fetchMembers, fetchTasks, updateTaskStatus } from "@/lib/api";
 import { TASK_COLUMNS, type Task, type TaskStatus } from "@/lib/domain";
 import { useSSEEvent } from "@/providers/SSEProvider";
 
@@ -54,6 +54,11 @@ export function TaskBoard({ projectId }: { projectId: string }) {
     queryKey: ["tasks", projectId],
     queryFn: () => fetchTasks(projectId),
     initialData: [] as Task[],
+  });
+
+  const { data: members = [] } = useQuery({
+    queryKey: ["members", projectId],
+    queryFn: () => fetchMembers(projectId),
   });
 
   const [columns, setColumns] = useState<Columns>(() => groupByStatus([]));
@@ -211,6 +216,8 @@ export function TaskBoard({ projectId }: { projectId: string }) {
               label={col.label}
               accent={col.accent}
               tasks={columns[col.status]}
+              projectId={projectId}
+              members={members}
             />
           ))}
         </div>

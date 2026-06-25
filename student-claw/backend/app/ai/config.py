@@ -29,6 +29,9 @@ AGENT_TIMEOUT_SECONDS = 30
 # How many recent text logs to inject into the system prompt window (§3.2).
 RECENT_MESSAGE_WINDOW = 30
 
+# Short-term memory: number of most recent turns injected as conversation memory.
+MEMORY_TURNS = 5
+
 # Chunking constants (§2.4).
 PDF_CHUNK_TOKENS = 512
 PDF_CHUNK_OVERLAP = 64
@@ -57,6 +60,10 @@ class AISettings:
     vision_model: str
     embed_model: str
     embed_dim: int
+    # OpenRouter fallback (Requirement 2).
+    openrouter_api_key: str
+    openrouter_base_url: str
+    openrouter_model: str
 
 
 @dataclass(frozen=True)
@@ -85,6 +92,9 @@ def get_ai_settings() -> AISettings:
         vision_model=os.getenv("AGNES_VISION_MODEL", chat_model),
         embed_model=os.getenv("AGNES_EMBED_MODEL", "agnes-embeddings"),
         embed_dim=int(os.getenv("EMBED_DIM", "1536")),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
+        openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        openrouter_model=os.getenv("OPENROUTER_MODEL", "google/gemini-3.5-flash"),
     )
 
 

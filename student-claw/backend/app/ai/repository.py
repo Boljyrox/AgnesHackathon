@@ -313,7 +313,19 @@ async def delegate_task(
         )
         session.add(task)
         await session.flush()
-        return ToolWriteResult(True, f"Assigned to @{telegram_username}.", str(task.id))
+        task_id, project_id = str(task.id), str(project.id)
+
+    # Published AFTER commit so the web's refetch sees the new task (bidirectional
+    # sync — Agnes delegations appear live on the web board, Requirement 3).
+    from app.bot import events
+
+    await events.publish_project_event(
+        project_id=project_id,
+        event_type="task_created",
+        payload={"task_id": task_id},
+        triggered_by="ai_agent",
+    )
+    return ToolWriteResult(True, f"Assigned to @{telegram_username}.", task_id)
 
 
 async def log_contribution_metric(

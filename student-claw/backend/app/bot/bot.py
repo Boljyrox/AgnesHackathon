@@ -37,17 +37,32 @@ _BOT_COMMANDS = [
     ("assign_work", "Delegate outstanding tasks to members"),
     ("project_goals", "State the project's goals"),
     ("deadline", "List and capture deadlines"),
+    ("change_details", "Edit goals, deadlines or tasks"),
+    ("status", "Set project status"),
+    ("clear", "Wipe the project's vector memory"),
+    ("celebrate", "End-of-project wrap-up"),
+    ("hehe", "A joke to cheer the team up"),
     ("verify", "Link your web account"),
     ("help", "Show all commands"),
 ]
 
 
 async def _post_init(application: Application) -> None:
-    """Register the slash-command menu with Telegram once the app is ready."""
+    """Register the command menu + start the Redis notification listener."""
     try:
         await application.bot.set_my_commands(_BOT_COMMANDS)
     except Exception as exc:  # pragma: no cover - network dependent
         logger.warning("Could not set bot command menu: %s", exc)
+
+    from app.bot.notifications import start_notification_listener
+
+    start_notification_listener(application)
+
+
+async def _post_shutdown(application: Application) -> None:
+    from app.bot.notifications import stop_notification_listener
+
+    await stop_notification_listener()
 
 
 def build_application() -> Application:
@@ -62,6 +77,7 @@ def build_application() -> Application:
         .token(settings.bot_token)
         .concurrent_updates(True)  # process updates concurrently on the loop
         .post_init(_post_init)
+        .post_shutdown(_post_shutdown)
         .build()
     )
     register_handlers(application)

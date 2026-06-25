@@ -10,6 +10,7 @@ closes.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -26,8 +27,11 @@ from app.database.models import (
     MessageLog,
     Project,
     ProjectLinkToken,
+    ProjectStatus,
     Student,
     StudentProject,
+    Task,
+    TaskStatus,
 )
 
 
@@ -256,3 +260,123 @@ async def log_incoming_message(
         session.add(log)
         await session.flush()
         return str(log.id)
+
+
+# ---------------------------------------------------------------------------
+# Project mutation helpers (Requirement 4 commands)
+# ---------------------------------------------------------------------------
+async def resolve_project_id(chat_id: int) -> Optional[str]:
+    async with session_scope() as session:
+        project = await session.scalar(select(Project).where(Project.chat_id == chat_id))
+        return str(project.id) if project else None
+
+
+async def get_project_goals(chat_id: int) -> tuple[bool, Optional[str]]:
+    """(exists, goals) for the chat's project."""
+    async with session_scope() as session:
+        project = await session.scalar(select(Project).where(Project.chat_id == chat_id))
+        if project is None:
+            return (False, None)
+        return (True, project.goals)
+
+
+async def update_project_goals(chat_id: int, goals: str) -> bool:
+    async with session_scope() as session:
+        project = await session.scalar(select(Project).where(Project.chat_id == chat_id))
+        if project is None:
+            return False
+        project.goals = goals.strip() or None
+        return True
+
+
+async def set_project_status(chat_id: int, status: ProjectStatus) -> bool:
+    async with session_scope() as session:
+        project = await session.scalar(select(Project).where(Project.chat_id == chat_id))
+        if project is None:
+            return False
+        project.status = status
+        return True
+
+
+async def get_task_ledger(chat_id: int) -> Optional[dict]:
+    """Completed vs outstanding vs dropped task titles for /celebrate."""
+    async with session_scope() as session:
+        project = await session.scalar(select(Project).where(Project.chat_id == chat_id))
+        if project is None:
+            return None
+        tasks = (
+            await session.scalars(
+                select(Task).where(Task.project_id == project.id, Task.deleted_at.is_(None))
+            )
+        ).all()
+    ledger: dict[str, list[str]] = {"completed": [], "outstanding": [], "dropped": []}
+    for t in tasks:
+        if t.status == TaskStatus.done:
+            ledger["completed"].append(t.title)
+        elif t.status == TaskStatus.dropped:
+            ledger["dropped"].append(t.title)
+        else:
+            ledger["outstanding"].append(t.title)
+    return ledger
+
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(text: str) -> str:
+    return _HTML_TAG_RE.sub("", text or "").strip()
+
+
+async def log_agent_interaction(
+    *,
+    chat_id: int,
+    asker_username: Optional[str],
+    asker_user_id: Optional[int],
+    question: str,
+    answer: str,
+    q_message_id: int,
+    a_message_id: int,
+) -> None:
+    """
+    Persist an agent Q&A turn into message_logs so it becomes part of the
+    short-term memory window (Requirement 2). Slash-command questions are
+    otherwise dropped (commands aren't captured by the passive listener), which
+    is why the agent "forgot" previous questions. NOT enqueued for embedding.
+    """
+    now = datetime.now(timezone.utc)
+    async with session_scope() as session:
+        project = await session.scalar(
+            select(Project).where(Project.chat_id == chat_id)
+        )
+        if project is None:
+            return
+
+        # User question.
+        session.add(
+            MessageLog(
+                id=uuid.uuid4(),
+                chat_id=chat_id,
+                project_id=project.id,
+                telegram_message_id=q_message_id,
+                sender_telegram_username=asker_username,
+                sender_telegram_user_id=asker_user_id,
+                content_type=ContentType.text,
+                raw_text=question,
+                is_vectorized=False,
+                received_at=now,
+            )
+        )
+        # Agnes answer (plain text; HTML stripped for memory readability).
+        session.add(
+            MessageLog(
+                id=uuid.uuid4(),
+                chat_id=chat_id,
+                project_id=project.id,
+                telegram_message_id=a_message_id,
+                sender_telegram_username="Agnes",
+                content_type=ContentType.text,
+                raw_text=_strip_html(answer),
+                is_vectorized=False,
+                received_at=now,
+            )
+        )
