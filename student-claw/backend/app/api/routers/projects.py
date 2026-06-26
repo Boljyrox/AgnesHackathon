@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,8 +21,15 @@ from app.api.schemas import (
     ProjectOut,
 )
 from sqlalchemy import func
-from app.database.models import Project, ProjectLinkToken, Student, StudentProject, Task
-from app.database.queries import get_project_members
+from app.database.models import (
+    MessageLog,
+    Project,
+    ProjectLinkToken,
+    Student,
+    StudentProject,
+    Task,
+)
+from app.database.queries import get_project_documents, get_project_members
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -183,6 +192,55 @@ async def update_project_goals(
         role=membership.role.value,
         memberCount=await _member_count(session, project.id),
         goals=project.goals,
+    )
+
+
+@router.get("/{project_id}/documents")
+async def list_documents(
+    project_id: str,
+    student: Student = Depends(get_current_student),
+    session: AsyncSession = Depends(db_session),
+) -> dict[str, list[dict]]:
+    project = await resolve_project(project_id, session)
+    await require_membership(project, student, session)
+    docs = await get_project_documents(session, project.id)
+    return {"documents": docs}
+
+
+@router.get("/{project_id}/documents/{message_log_id}/download")
+async def download_document(
+    project_id: str,
+    message_log_id: str,
+    student: Student = Depends(get_current_student),
+    session: AsyncSession = Depends(db_session),
+):
+    """Stream a shared file back from MinIO (member-gated)."""
+    from fastapi import Response
+
+    from app.ai import storage
+
+    project = await resolve_project(project_id, session)
+    await require_membership(project, student, session)
+
+    try:
+        mid = uuid.UUID(message_log_id)
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found.")
+
+    log = await session.get(MessageLog, mid)
+    if log is None or log.project_id != project.id or not log.file_storage_path:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found.")
+
+    try:
+        data = await storage.fetch_bytes(log.file_storage_path)
+    except Exception:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Storage unavailable.")
+
+    filename = log.file_storage_path.rsplit("/", 1)[-1] or "file"
+    return Response(
+        content=data,
+        media_type=log.file_mime_type or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 

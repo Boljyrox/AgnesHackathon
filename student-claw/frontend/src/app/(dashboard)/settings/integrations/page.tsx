@@ -34,28 +34,28 @@ export default function IntegrationsPage() {
   return (
     <div className="mx-auto max-w-2xl p-4 lg:p-8">
       <h1 className="text-2xl font-semibold">Integrations</h1>
-      <p className="mt-1 text-sm text-slate-500">Connect external services to Student Claw.</p>
+      <p className="mt-1 text-sm text-slate-400">Connect external services to Student Claw.</p>
 
       {banner && (
         <p
           role="status"
           className={`mt-4 rounded-lg border px-3 py-2 text-sm ${
             banner.ok
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-              : "border-rose-200 bg-rose-50 text-rose-700"
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+              : "border-rose-500/30 bg-rose-500/10 text-rose-300"
           }`}
         >
           {banner.text}
         </p>
       )}
 
-      <section className="mt-6 flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5">
-        <span className="grid h-10 w-10 place-items-center rounded-xl bg-slate-100 text-lg">
+      <section className="mt-6 flex items-center gap-4 rounded-2xl border border-white/10 bg-slate-900/70 p-5">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-slate-800 text-lg">
           📅
         </span>
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold">Google Calendar</h2>
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-slate-400">
             Push confirmed project deadlines to your primary calendar.
           </p>
         </div>
@@ -67,8 +67,8 @@ export default function IntegrationsPage() {
         </a>
       </section>
 
-      <p className="mt-6 text-sm text-slate-500">
-        <Link href="/settings" className="text-brand-600 hover:text-brand-700">
+      <p className="mt-6 text-sm text-slate-400">
+        <Link href="/settings" className="text-brand-300 hover:text-brand-300">
           ← Back to settings
         </Link>
       </p>

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import (
     AIRequestLog,
+    ContentType,
     ContributionMetric,
     Deadline,
     MessageLog,
@@ -61,6 +62,37 @@ async def get_ai_request_logs(
             "totalTokens": r.total_tokens,
         }
         for r in rows
+    ]
+
+
+async def get_project_documents(
+    session: AsyncSession, project_id: uuid.UUID
+) -> list[dict[str, Any]]:
+    """Files (images + documents) shared in a project, newest first."""
+    rows = (
+        await session.scalars(
+            select(MessageLog)
+            .where(
+                MessageLog.project_id == project_id,
+                MessageLog.deleted_at.is_(None),
+                MessageLog.content_type.in_([ContentType.image, ContentType.document]),
+                MessageLog.file_storage_path.is_not(None),
+            )
+            .order_by(MessageLog.received_at.desc())
+        )
+    ).all()
+    return [
+        {
+            "id": str(m.id),
+            "filename": (m.file_storage_path or "").rsplit("/", 1)[-1] or "file",
+            "contentType": m.content_type.value,
+            "mimeType": m.file_mime_type,
+            "sender": m.sender_telegram_username,
+            "receivedAt": m.received_at,
+            "isVectorized": m.is_vectorized,
+            "hasText": bool((m.extracted_text or "").strip()),
+        }
+        for m in rows
     ]
 
 

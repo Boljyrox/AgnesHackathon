@@ -176,12 +176,17 @@ async def _run_vlm_extraction(image_bytes: bytes, mime: str = "jpeg") -> str:
 # ---------------------------------------------------------------------------
 # Image extraction (VLM)
 # ---------------------------------------------------------------------------
-async def extract_text_from_image(data: bytes) -> ParsedContent:
+async def extract_text_from_image(data: bytes, *, use_vlm: bool = True) -> ParsedContent:
     """
     Extract text from an image using the Qwen 2.5 VL 72B VLM via OpenRouter.
     Falls back to an empty result rather than raising so that ingestion can
-    continue even if the VLM is temporarily unavailable.
+    continue even if the VLM is temporarily unavailable. When `use_vlm` is False
+    (admin disabled Qwen-VL) images are not OCR'd.
     """
+    if not use_vlm:
+        logger.info("Qwen-VL disabled for this group; skipping image OCR.")
+        return ParsedContent(text="", segments=[], modality="image")
+
     # Detect PNG vs JPEG by magic bytes so we pass the right MIME to the model.
     mime = "png" if data[:4] == b"\x89PNG" else "jpeg"
     try:
@@ -250,14 +255,15 @@ async def render_pdf_pages_to_images(data: bytes, max_pages: int = 5) -> list[by
     return await asyncio.to_thread(_pdf_pages_to_pngs_sync, data, max_pages)
 
 
-async def extract_text_from_pdf(data: bytes) -> ParsedContent:
+async def extract_text_from_pdf(data: bytes, *, use_vlm: bool = True) -> ParsedContent:
     """
     Extract text from a PDF.
 
     Strategy:
     1. Try PyMuPDF text extraction on every page (fast, no API cost).
     2. For pages that yield no selectable text (scanned / image-only), render
-       the page to a high-resolution PNG and send it to the VLM.
+       the page to a high-resolution PNG and send it to the VLM (unless the
+       admin disabled Qwen-VL via use_vlm=False).
     3. Concatenate results, preserving page order.
     """
     raw_pages = await asyncio.to_thread(_pdf_pages_sync, data)
@@ -268,6 +274,10 @@ async def extract_text_from_pdf(data: bytes) -> ParsedContent:
         if normalised:
             # Fast path: selectable text found.
             pages.append(normalised)
+            continue
+
+        if not use_vlm:
+            pages.append("")  # scanned page, VLM disabled → skip
             continue
 
         # Fallback: render this page and run VLM OCR.
@@ -344,7 +354,9 @@ async def extract_text_from_pptx(data: bytes) -> ParsedContent:
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
-async def parse_document(data: bytes, mime_type: Optional[str], filename: str = "") -> ParsedContent:
+async def parse_document(
+    data: bytes, mime_type: Optional[str], filename: str = "", *, use_vlm: bool = True
+) -> ParsedContent:
     """
     Route a document to the right extractor by MIME type, with a filename-based
     fallback. Raises ParseError for unsupported types.
@@ -353,7 +365,7 @@ async def parse_document(data: bytes, mime_type: Optional[str], filename: str = 
     name = (filename or "").lower()
 
     if mime == MIME_PDF or name.endswith(".pdf"):
-        return await extract_text_from_pdf(data)
+        return await extract_text_from_pdf(data, use_vlm=use_vlm)
     if mime == MIME_PPTX or name.endswith(".pptx"):
         return await extract_text_from_pptx(data)
 

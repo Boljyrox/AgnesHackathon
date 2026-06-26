@@ -37,7 +37,7 @@ export default function RegisterPage() {
         }),
       });
       if (res.ok) {
-        router.push("/");
+        router.push("/dashboard");
         router.refresh();
         return;
       }
@@ -51,12 +51,12 @@ export default function RegisterPage() {
   }
 
   const field =
-    "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100";
+    "w-full rounded-lg border border-white/10 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-500/30";
 
   return (
     <>
       <h1 className="mb-1 text-xl font-semibold">Create your account</h1>
-      <p className="mb-5 text-sm text-slate-500">
+      <p className="mb-5 text-sm text-slate-400">
         Use the same Telegram username you&apos;ll verify with.
       </p>
 
@@ -64,7 +64,7 @@ export default function RegisterPage() {
         {error && (
           <p
             role="alert"
-            className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700"
+            className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300"
           >
             {error}
           </p>
@@ -115,7 +115,7 @@ export default function RegisterPage() {
           <label htmlFor="telegram_username" className="mb-1 block text-sm font-medium">
             Telegram username
           </label>
-          <div className="flex items-center rounded-lg border border-slate-300 focus-within:border-brand-400 focus-within:ring-2 focus-within:ring-brand-100">
+          <div className="flex items-center rounded-lg border border-white/10 focus-within:border-brand-400 focus-within:ring-2 focus-within:ring-brand-500/30">
             <span className="pl-3 text-sm text-slate-400">@</span>
             <input
               id="telegram_username"
@@ -140,9 +140,9 @@ export default function RegisterPage() {
         </button>
       </form>
 
-      <p className="mt-5 text-center text-sm text-slate-500">
+      <p className="mt-5 text-center text-sm text-slate-400">
         Already have an account?{" "}
-        <Link href="/login" className="font-medium text-brand-600 hover:text-brand-700">
+        <Link href="/login" className="font-medium text-brand-300 hover:text-brand-300">
           Sign in
         </Link>
       </p>

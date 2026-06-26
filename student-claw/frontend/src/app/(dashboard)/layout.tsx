@@ -32,7 +32,7 @@ export default async function DashboardLayout({
         <Sidebar username={username} />
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar />
-          <main className="flex-1 overflow-y-auto bg-slate-50">{children}</main>
+          <main className="flex-1 overflow-y-auto bg-slate-950">{children}</main>
         </div>
       </div>
     </SSEProvider>

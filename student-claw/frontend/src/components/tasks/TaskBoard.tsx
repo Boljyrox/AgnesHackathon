@@ -195,7 +195,7 @@ export function TaskBoard({ projectId }: { projectId: string }) {
       {notice && (
         <div
           role="status"
-          className="mx-4 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+          className="mx-4 mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300"
         >
           {notice}
         </div>
@@ -224,7 +224,7 @@ export function TaskBoard({ projectId }: { projectId: string }) {
 
         <DragOverlay>
           {activeTask ? (
-            <div className="w-64 rotate-2 rounded-xl border border-brand-200 bg-white p-3 shadow-xl">
+            <div className="w-64 rotate-2 rounded-xl border border-brand-500/30 bg-slate-900/70 p-3 shadow-xl">
               <TaskCardContent task={activeTask} />
             </div>
           ) : null}
@@ -274,7 +274,7 @@ function AddTaskForm({ projectId }: { projectId: string }) {
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="Task title…"
-        className="w-64 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+        className="w-64 rounded-lg border border-white/10 px-3 py-1.5 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-500/30"
       />
       <button
         type="submit"
@@ -289,7 +289,7 @@ function AddTaskForm({ projectId }: { projectId: string }) {
           setOpen(false);
           setTitle("");
         }}
-        className="rounded-lg px-2 py-1.5 text-sm text-slate-500 hover:bg-slate-100"
+        className="rounded-lg px-2 py-1.5 text-sm text-slate-400 hover:bg-slate-800"
       >
         Cancel
       </button>

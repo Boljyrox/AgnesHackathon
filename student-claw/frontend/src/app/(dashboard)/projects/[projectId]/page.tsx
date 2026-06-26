@@ -41,7 +41,7 @@ export default function ProjectOverviewPage({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-4 border-b border-slate-200 bg-white px-4 py-3 lg:px-6">
+      <div className="flex items-center gap-4 border-b border-white/10 bg-slate-900/70 px-4 py-3 lg:px-6">
         <h1 className="text-lg font-semibold">{project?.name ?? "Project"}</h1>
         <ProjectTabs projectId={projectId} active="overview" />
       </div>
@@ -49,20 +49,20 @@ export default function ProjectOverviewPage({
       <div className="min-h-0 flex-1 overflow-y-auto p-4 lg:p-8">
         <div className="mx-auto max-w-3xl space-y-6">
           {isLoading && <p className="text-sm text-slate-400">Loading…</p>}
-          {isError && <p className="text-sm text-rose-600">Couldn&apos;t load this project.</p>}
+          {isError && <p className="text-sm text-rose-400">Couldn&apos;t load this project.</p>}
 
           {project && (
             <>
               {/* Project Goals — front and centre */}
-              <section className="overflow-hidden rounded-2xl border border-brand-200 bg-gradient-to-br from-brand-50 to-white shadow-sm">
-                <div className="flex items-center justify-between border-b border-brand-100 px-5 py-3">
-                  <h2 className="flex items-center gap-2 text-sm font-semibold text-brand-800">
+              <section className="overflow-hidden rounded-2xl border border-brand-500/30 bg-gradient-to-br from-brand-500/15 to-slate-900/40 shadow-glow backdrop-blur-xl">
+                <div className="flex items-center justify-between border-b border-brand-500/20 px-5 py-3">
+                  <h2 className="flex items-center gap-2 text-sm font-semibold text-brand-200">
                     <span>🎯</span> Project Goals
                   </h2>
                   {!editing && (
                     <button
                       onClick={() => setEditing(true)}
-                      className="rounded-lg border border-brand-200 bg-white px-3 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
+                      className="rounded-lg border border-brand-500/30 bg-slate-900/70 px-3 py-1 text-xs font-medium text-brand-300 hover:bg-brand-500/10"
                     >
                       {project.goals ? "Edit" : "Add goals"}
                     </button>
@@ -78,7 +78,7 @@ export default function ProjectOverviewPage({
                         rows={6}
                         autoFocus
                         placeholder="What is this project trying to achieve? List the key objectives…"
-                        className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+                        className="w-full resize-y rounded-lg border border-white/10 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-500/30"
                       />
                       <div className="flex gap-2">
                         <button
@@ -93,14 +93,14 @@ export default function ProjectOverviewPage({
                             setEditing(false);
                             setDraft(project.goals ?? "");
                           }}
-                          className="rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-slate-100"
+                          className="rounded-lg px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-800"
                         >
                           Cancel
                         </button>
                       </div>
                     </div>
                   ) : project.goals ? (
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
                       {project.goals}
                     </p>
                   ) : (
@@ -128,9 +128,9 @@ export default function ProjectOverviewPage({
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-xl">
       <p className="text-xs uppercase tracking-wide text-slate-400">{label}</p>
-      <p className="mt-1 text-lg font-semibold capitalize text-slate-800">{value}</p>
+      <p className="mt-1 text-lg font-semibold capitalize text-slate-100">{value}</p>
     </div>
   );
 }

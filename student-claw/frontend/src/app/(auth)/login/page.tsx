@@ -25,7 +25,7 @@ export default function LoginPage() {
       });
       if (res.ok) {
         const returnUrl =
-          new URLSearchParams(window.location.search).get("returnUrl") || "/";
+          new URLSearchParams(window.location.search).get("returnUrl") || "/dashboard";
         router.push(returnUrl);
         router.refresh();
         return;
@@ -42,13 +42,13 @@ export default function LoginPage() {
   return (
     <>
       <h1 className="mb-1 text-xl font-semibold">Welcome back</h1>
-      <p className="mb-5 text-sm text-slate-500">Sign in to your dashboard.</p>
+      <p className="mb-5 text-sm text-slate-400">Sign in to your dashboard.</p>
 
       <form onSubmit={onSubmit} className="space-y-4">
         {error && (
           <p
             role="alert"
-            className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700"
+            className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300"
           >
             {error}
           </p>
@@ -64,7 +64,7 @@ export default function LoginPage() {
             onChange={(e) => setUsername(e.target.value)}
             required
             autoComplete="username"
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+            className="w-full rounded-lg border border-white/10 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-500/30"
           />
         </div>
 
@@ -79,7 +79,7 @@ export default function LoginPage() {
             onChange={(e) => setPassword(e.target.value)}
             required
             autoComplete="current-password"
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+            className="w-full rounded-lg border border-white/10 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-500/30"
           />
         </div>
 
@@ -92,9 +92,9 @@ export default function LoginPage() {
         </button>
       </form>
 
-      <p className="mt-5 text-center text-sm text-slate-500">
+      <p className="mt-5 text-center text-sm text-slate-400">
         No account?{" "}
-        <Link href="/register" className="font-medium text-brand-600 hover:text-brand-700">
+        <Link href="/register" className="font-medium text-brand-300 hover:text-brand-300">
           Create one
         </Link>
       </p>

@@ -32,18 +32,8 @@ _application: Application | None = None
 
 # Commands shown in Telegram's "/" menu.
 _BOT_COMMANDS = [
+    ("sc", "Open the Student Claw menu"),
     ("ask", "Ask Agnes anything about this project"),
-    ("summary", "Project status briefing"),
-    ("assign_work", "Delegate outstanding tasks to members"),
-    ("project_goals", "State the project's goals"),
-    ("deadline", "List and capture deadlines"),
-    ("change_details", "Edit goals, deadlines or tasks"),
-    ("status", "Set project status"),
-    ("clear", "Wipe the project's vector memory"),
-    ("celebrate", "End-of-project wrap-up"),
-    ("hehe", "A joke to cheer the team up"),
-    ("verify", "Link your web account"),
-    ("help", "Show all commands"),
 ]
 
 

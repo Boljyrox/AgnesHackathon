@@ -4,6 +4,7 @@
 
 :root {
   --font-sans: "Inter", system-ui, sans-serif;
+  color-scheme: dark;
 }
 
 html,
@@ -12,25 +13,55 @@ body {
 }
 
 body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+  @apply bg-slate-950 text-slate-200 antialiased;
 }
 
-/* Telegram-HTML rendered inside Agnes responses. */
+/* Premium dark scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(51 65 85) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgb(51 65 85);
+  border-radius: 9999px;
+}
+
+@layer components {
+  /* Glassmorphism surface */
+  .glass {
+    @apply border border-white/10 bg-white/5 backdrop-blur-xl;
+  }
+  .glass-strong {
+    @apply border border-white/10 bg-slate-900/60 backdrop-blur-xl;
+  }
+}
+
+/* Agnes Telegram-HTML rendering (dark) */
 .agnes-html code {
-  @apply rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.85em] text-slate-800;
+  @apply rounded bg-slate-800 px-1 py-0.5 font-mono text-[0.85em] text-sky-300;
 }
 .agnes-html pre {
-  @apply my-2 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-xs text-slate-100;
+  @apply my-2 overflow-x-auto rounded-lg bg-black/40 p-3 font-mono text-xs text-slate-200;
 }
 .agnes-html a {
-  @apply text-brand-600 underline underline-offset-2 hover:text-brand-700;
+  @apply text-brand-400 underline underline-offset-2 hover:text-brand-300;
 }
 .agnes-html b,
 .agnes-html strong {
-  @apply font-semibold;
+  @apply font-semibold text-slate-100;
 }
 
-/* Respect users who prefer reduced motion. */
+/* Reactive cursor — hidden on touch / coarse pointers */
+@media (pointer: coarse) {
+  .reactive-cursor {
+    display: none !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

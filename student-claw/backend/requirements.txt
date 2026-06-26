@@ -29,6 +29,7 @@ python-pptx>=0.6        # PPTX slide extraction
 Pillow>=10.0
 langdetect>=1.0.9
 tenacity>=8.2            # Retry logic for VLM API calls
+fastembed>=0.3          # Local embeddings (Agnes has no embeddings endpoint)
 
 # Auth / crypto / HTTP
 bcrypt>=4.1

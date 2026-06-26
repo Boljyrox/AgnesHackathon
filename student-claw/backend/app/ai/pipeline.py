@@ -25,7 +25,7 @@ from typing import Optional
 
 from qdrant_client import models as qmodels
 
-from app.ai import parser, queue, repository, storage, vision
+from app.ai import parser, queue, repository, storage
 from app.ai.chunking import (
     Chunk,
     ChatMessage,
@@ -60,9 +60,24 @@ async def ensure_collection(chat_id: int) -> str:
     lock = _collection_locks.setdefault(name, asyncio.Lock())
     async with lock:
         client = get_qdrant_client()
-        if await client.collection_exists(name):
-            return name
         dim = get_ai_settings().embed_dim
+        if await client.collection_exists(name):
+            # Auto-heal a dimension mismatch (e.g. after switching embedding
+            # provider). Safe because a wrong-dim collection can't hold usable
+            # vectors anyway.
+            try:
+                info = await client.get_collection(name)
+                existing = info.config.params.vectors.size  # type: ignore[union-attr]
+            except Exception:
+                existing = dim
+            if existing != dim:
+                logger.warning(
+                    "Collection %s dim %s != expected %s; recreating.",
+                    name, existing, dim,
+                )
+                await client.delete_collection(name)
+            else:
+                return name
         await client.create_collection(
             collection_name=name,
             vectors_config=qmodels.VectorParams(
@@ -76,19 +91,45 @@ async def ensure_collection(chat_id: int) -> str:
 # ---------------------------------------------------------------------------
 # Embeddings
 # ---------------------------------------------------------------------------
+_fastembed_model = None
+
+
+def _get_fastembed():
+    global _fastembed_model
+    if _fastembed_model is None:
+        from fastembed import TextEmbedding
+
+        name = get_ai_settings().fastembed_model
+        logger.info("Loading local embedding model %s (first run downloads it).", name)
+        _fastembed_model = TextEmbedding(model_name=name)
+    return _fastembed_model
+
+
+def _embed_fastembed_sync(texts: list[str]) -> list[list[float]]:
+    model = _get_fastembed()
+    return [vec.tolist() for vec in model.embed(texts)]
+
+
 async def embed_texts(
     texts: list[str], *, chat_id: Optional[int] = None
 ) -> list[list[float]]:
-    """Embed texts in batches of <=20 via the Agnes AI /embeddings endpoint."""
+    """
+    Embed texts. Uses a local model (fastembed) by default since Agnes exposes
+    no embeddings endpoint; set EMBED_PROVIDER=agnes to use Agnes instead.
+    """
     if not texts:
         return []
+    settings = get_ai_settings()
+    if settings.embed_provider == "fastembed":
+        return await asyncio.to_thread(_embed_fastembed_sync, texts)
+
+    # Agnes provider.
     client = get_agnes_client()
-    model = get_ai_settings().embed_model
+    model = settings.embed_model
     vectors: list[list[float]] = []
     for start in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[start : start + EMBED_BATCH_SIZE]
         resp = await logged_embeddings(client, model=model, input=batch, chat_id=chat_id)
-        # Preserve request order.
         ordered = sorted(resp.data, key=lambda d: d.index)
         vectors.extend(d.embedding for d in ordered)
     return vectors
@@ -117,15 +158,18 @@ async def _resolve_text_and_chunks(
         # (Sliding-window conversational chunking is used by reindex_chat.)
         return _Prepared([Chunk(text, 0)], None)
 
+    # Admin model toggle: Qwen-VL OCR can be disabled per group (/admin_settings).
+    use_vlm = (await repository.get_allowed_models(msg.chat_id)).get("qwen_vl", True)
+
     if ctype == "image":
         if not msg.file_storage_path:
             return None
         text = msg.extracted_text
         if not text:
             data = await storage.fetch_bytes(msg.file_storage_path)
-            text = await _understand_image(
-                data, msg.file_mime_type or "image/jpeg", chat_id=msg.chat_id
-            )
+            # Qwen 2.5 VL 72B (OpenRouter) OCR — primary path.
+            parsed = await parser.extract_text_from_image(data, use_vlm=use_vlm)
+            text = parsed.text
             if text:
                 await repository.save_extracted_text(msg.id, text)
         if not text:
@@ -135,22 +179,28 @@ async def _resolve_text_and_chunks(
     if ctype == "document":
         if not msg.file_storage_path:
             return None
-        data = await storage.fetch_bytes(msg.file_storage_path)
-        parsed = await parser.parse_document(
-            data, msg.file_mime_type, _basename(msg.file_storage_path)
-        )
-        is_pptx = (msg.file_mime_type or "").lower() == MIME_PPTX or parsed.modality == "pptx"
-
-        # Scanned / image-only PDF: PyMuPDF found little text → fall back to vision.
-        if not is_pptx and len(parsed.text) < 40:
-            vision_text = await _understand_pdf_via_vision(data, chat_id=msg.chat_id)
-            if vision_text:
-                parsed.text = vision_text
-
-        if not parsed.text:
+        # parse_document handles PDF (PyMuPDF text → Qwen-VL per scanned page)
+        # and PPTX (python-pptx). Use the cached extracted_text when present.
+        text = msg.extracted_text
+        parsed_segments: list[str] = []
+        is_pptx = (msg.file_mime_type or "").lower() == MIME_PPTX
+        if not text:
+            data = await storage.fetch_bytes(msg.file_storage_path)
+            parsed = await parser.parse_document(
+                data, msg.file_mime_type, _basename(msg.file_storage_path), use_vlm=use_vlm
+            )
+            text = parsed.text
+            parsed_segments = parsed.segments
+            is_pptx = is_pptx or parsed.modality == "pptx"
+            if text:
+                await repository.save_extracted_text(msg.id, text)
+        if not text:
             return None
-        await repository.save_extracted_text(msg.id, parsed.text)
-        chunks = chunk_pptx_slides(parsed.segments) if is_pptx else chunk_pdf(parsed.text)
+        chunks = (
+            chunk_pptx_slides(parsed_segments)
+            if (is_pptx and parsed_segments)
+            else chunk_pdf(text)
+        )
         return _Prepared(chunks, _basename(msg.file_storage_path))
 
     # voice (no transcription yet) or unknown → skip.
@@ -160,42 +210,6 @@ async def _resolve_text_and_chunks(
 
 def _basename(path: Optional[str]) -> Optional[str]:
     return path.rsplit("/", 1)[-1] if path else None
-
-
-async def _understand_image(data: bytes, mime: str, *, chat_id: Optional[int] = None) -> str:
-    """Agnes vision (primary) with Tesseract OCR fallback."""
-    try:
-        text = await vision.describe_image(data, mime, chat_id=chat_id)
-        if text:
-            return parser.normalize_text(text)
-    except vision.VisionError as exc:
-        logger.warning("Vision failed, falling back to OCR: %s", exc)
-    try:
-        parsed = await parser.extract_text_from_image(data)
-        return parsed.text
-    except Exception as exc:  # pragma: no cover - OCR optional
-        logger.warning("OCR fallback also failed: %s", exc)
-        return ""
-
-
-async def _understand_pdf_via_vision(
-    data: bytes, max_pages: int = 5, *, chat_id: Optional[int] = None
-) -> str:
-    """Render image-only PDF pages and read each with the vision model."""
-    try:
-        pages = await parser.render_pdf_pages_to_images(data, max_pages=max_pages)
-    except Exception as exc:
-        logger.warning("PDF page render failed: %s", exc)
-        return ""
-    out: list[str] = []
-    for i, png in enumerate(pages):
-        try:
-            text = await vision.describe_image(png, "image/png", chat_id=chat_id)
-            if text:
-                out.append(parser.normalize_text(text))
-        except vision.VisionError as exc:
-            logger.warning("Vision failed on PDF page %d: %s", i, exc)
-    return "\n\n".join(out)
 
 
 async def vectorize_message(message_log_id: str) -> int:
@@ -349,13 +363,15 @@ async def semantic_search(
             ]
         )
 
-    hits = await client.search(
+    # query_points is the current Qdrant API (replaces the removed .search()).
+    response = await client.query_points(
         collection_name=name,
-        query_vector=query_vec,
+        query=query_vec,
         limit=max(top_k * 2, top_k),  # over-fetch to survive dedup
         query_filter=query_filter,
         with_payload=True,
     )
+    hits = response.points
 
     best: dict[str, SearchResult] = {}
     for h in hits:
@@ -401,7 +417,8 @@ async def clear_project_cache(project_id: str, *, include_files: bool) -> Cleans
     """
     from sqlalchemy import func, update as _sql_update
 
-    from app.database.models import MessageLog, Project
+    from app.database.connection import session_scope
+    from app.database.models import Deadline, MessageLog, Project
 
     pid = uuid.UUID(project_id)
     vectors_deleted = False
@@ -441,7 +458,19 @@ async def clear_project_cache(project_id: str, *, include_files: bool) -> Cleans
             logger.error("Cache cleanse: MinIO bucket delete failed: %s", exc)
 
     # Step 5: SOFT-DELETE MESSAGE LOGS (optimized single UPDATE).
+    # First break the relational references INTO message_logs so neither the
+    # soft-delete nor any later hard-delete/retention sweep trips a FK constraint
+    # (deadlines.source_message_log_id is the only real FK). tasks reference logs
+    # only via JSONB metadata (no constraint), so nothing to break there.
     async with session_scope() as session:
+        await session.execute(
+            _sql_update(Deadline)
+            .where(
+                Deadline.project_id == pid,
+                Deadline.source_message_log_id.is_not(None),
+            )
+            .values(source_message_log_id=None)
+        )
         result = await session.execute(
             _sql_update(MessageLog)
             .where(MessageLog.project_id == pid, MessageLog.deleted_at.is_(None))

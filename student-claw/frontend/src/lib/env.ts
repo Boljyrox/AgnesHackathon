@@ -81,6 +81,9 @@ export const backendPath = {
   task: (projectId: string, taskId: string) =>
     `/projects/${projectId}/tasks/${taskId}`,
   members: (projectId: string) => `/projects/${projectId}/members`,
+  documents: (projectId: string) => `/projects/${projectId}/documents`,
+  documentDownload: (projectId: string, docId: string) =>
+    `/projects/${projectId}/documents/${docId}/download`,
   context: (projectId: string) => `/projects/${projectId}/context`,
   deadlines: (projectId: string) => `/projects/${projectId}/deadlines`,
   contributions: (projectId: string) => `/projects/${projectId}/contributions`,

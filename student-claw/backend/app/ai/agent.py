@@ -93,8 +93,15 @@ def build_system_prompt(
         or "(no prior turns)"
     )
 
+    # Mode persona (Multi-Mode Group Agent) — shifts tone per group mode.
+    from app.bot.modes import persona_for
+
+    persona = persona_for(ctx.group_mode)
+    persona_block = f"{persona}\n\n" if persona else ""
+
     return (
         f"{_ROLE}\n\n"
+        f"{persona_block}"
         f"PROJECT CONTEXT\n"
         f"Name: {ctx.name}\n"
         f"Module: {ctx.module_code or 'N/A'}\n"
@@ -275,7 +282,9 @@ async def run_agent(
     except Exception as exc:
         logger.exception("Agent error for chat_id=%s; trying fallback: %s", chat_id, exc)
 
-    fallback = await _openrouter_fallback(base_messages, chat_id=chat_id)
-    if fallback:
-        return f"{fallback}{FALLBACK_NOTE}"
+    # Gemini fallback — only if the admin hasn't disabled it (/admin_settings).
+    if ctx.allowed_models.get("gemini_fallback", True):
+        fallback = await _openrouter_fallback(base_messages, chat_id=chat_id)
+        if fallback:
+            return f"{fallback}{FALLBACK_NOTE}"
     return "⚠️ Something went wrong while processing that. Please try again."

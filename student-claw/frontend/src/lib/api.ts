@@ -96,6 +96,28 @@ export async function fetchMembers(projectId: string): Promise<MemberDto[]> {
   return request<MemberDto[]>(`/api/projects/${projectId}/members`);
 }
 
+export interface ProjectDocument {
+  id: string;
+  filename: string;
+  contentType: "image" | "document";
+  mimeType: string | null;
+  sender: string | null;
+  receivedAt: string;
+  isVectorized: boolean;
+  hasText: boolean;
+}
+
+export async function fetchDocuments(projectId: string): Promise<ProjectDocument[]> {
+  const { documents } = await request<{ documents: ProjectDocument[] }>(
+    `/api/projects/${projectId}/documents`,
+  );
+  return documents;
+}
+
+export function documentDownloadUrl(projectId: string, docId: string): string {
+  return `/api/projects/${projectId}/documents/${docId}/download`;
+}
+
 export async function fetchTasks(projectId: string): Promise<Task[]> {
   const { tasks } = await request<{ tasks: Task[] }>(
     `/api/projects/${projectId}/tasks`,

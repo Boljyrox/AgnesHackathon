@@ -25,12 +25,12 @@ export function TaskCardContent({ task }: { task: Task }) {
   return (
     <div className="space-y-2">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-sm font-medium leading-snug text-slate-800">{task.title}</p>
+        <p className="text-sm font-medium leading-snug text-slate-100">{task.title}</p>
         <PriorityBadge priority={task.priority} />
       </div>
 
       {task.deadlineTitle && (
-        <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
+        <span className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-300">
           <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
             <path d="M8 4v4l3 2-.75 1.2L7 9V4z M8 1a7 7 0 100 14A7 7 0 008 1z" />
           </svg>
@@ -42,7 +42,7 @@ export function TaskCardContent({ task }: { task: Task }) {
         {task.assignee ? (
           <>
             <Avatar name={task.assignee.displayName} size="sm" />
-            <span className="text-xs text-slate-500">{task.assignee.displayName}</span>
+            <span className="text-xs text-slate-400">{task.assignee.displayName}</span>
           </>
         ) : (
           <span className="text-xs italic text-slate-400">Unassigned</span>
@@ -75,8 +75,8 @@ export function TaskCard({
       style={style}
       {...attributes}
       {...listeners}
-      className={`cursor-grab touch-none rounded-xl border border-slate-200 bg-white p-3 shadow-sm outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-brand-500 active:cursor-grabbing ${
-        isDragging ? "opacity-40" : "hover:shadow-md"
+      className={`cursor-grab touch-none rounded-xl border border-white/10 bg-slate-900/60 p-3 shadow-sm outline-none backdrop-blur-md transition-all hover:border-brand-500/30 focus-visible:ring-2 focus-visible:ring-brand-500 active:cursor-grabbing ${
+        isDragging ? "opacity-40" : "hover:shadow-glow"
       }`}
       aria-roledescription="Draggable task"
     >
@@ -115,7 +115,7 @@ function AssigneeSelect({
       onPointerDown={(e) => e.stopPropagation()}
       onChange={(e) => reassign.mutate(e.target.value)}
       aria-label="Assign task"
-      className="mt-2 w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 outline-none focus:border-brand-400"
+      className="mt-2 w-full rounded-md border border-white/10 bg-slate-950 px-2 py-1 text-xs text-slate-300 outline-none focus:border-brand-400"
     >
       <option value="">Unassigned</option>
       {members.map((m) => (

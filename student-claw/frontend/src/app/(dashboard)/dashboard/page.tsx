@@ -32,9 +32,9 @@ function formatDate(iso: string): string {
 function dueRelative(iso: string): { label: string; tone: string } {
   const ms = new Date(iso).getTime() - Date.now();
   const days = Math.round(ms / 86_400_000);
-  if (ms < 0) return { label: "overdue", tone: "text-rose-600" };
-  if (days === 0) return { label: "today", tone: "text-amber-600" };
-  if (days === 1) return { label: "tomorrow", tone: "text-amber-600" };
+  if (ms < 0) return { label: "overdue", tone: "text-rose-400" };
+  if (days === 0) return { label: "today", tone: "text-amber-400" };
+  if (days === 1) return { label: "tomorrow", tone: "text-amber-400" };
   return { label: `in ${days} days`, tone: "text-slate-400" };
 }
 
@@ -59,7 +59,7 @@ export default function OverviewPage() {
     return <div className="p-8 text-sm text-slate-400">Loading your dashboard…</div>;
   }
   if (isError || !data) {
-    return <div className="p-8 text-sm text-rose-600">Couldn&apos;t load your dashboard.</div>;
+    return <div className="p-8 text-sm text-rose-400">Couldn&apos;t load your dashboard.</div>;
   }
 
   return (
@@ -67,7 +67,7 @@ export default function OverviewPage() {
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Hi, {data.displayName} 👋</h1>
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-slate-400">
             {data.projects.length} project{data.projects.length === 1 ? "" : "s"} ·{" "}
             {data.todos.length} open task{data.todos.length === 1 ? "" : "s"}
           </p>
@@ -88,7 +88,7 @@ export default function OverviewPage() {
         {data.projects.length === 0 ? (
           <EmptyCard>
             You&apos;re not in any projects yet.{" "}
-            <Link href="/projects/link" className="font-medium text-brand-600">
+            <Link href="/projects/link" className="font-medium text-brand-300">
               Link a Telegram group
             </Link>{" "}
             to get started.
@@ -99,11 +99,11 @@ export default function OverviewPage() {
               <Link
                 key={p.id}
                 href={`/projects/${p.id}`}
-                className="rounded-2xl border border-slate-200 bg-white p-4 transition-colors hover:border-brand-200 hover:bg-brand-50"
+                className="rounded-2xl border border-white/10 bg-slate-900/70 p-4 transition-colors hover:border-brand-500/30 hover:bg-brand-500/10"
               >
                 <div className="flex items-center justify-between">
                   <h3 className="truncate font-medium">{p.name}</h3>
-                  <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs capitalize text-slate-500">
+                  <span className="shrink-0 rounded-full bg-slate-800 px-2 py-0.5 text-xs capitalize text-slate-400">
                     {p.role}
                   </span>
                 </div>
@@ -123,11 +123,11 @@ export default function OverviewPage() {
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
             My to-do list
           </h2>
-          <div className="rounded-2xl border border-slate-200 bg-white">
+          <div className="rounded-2xl border border-white/10 bg-slate-900/70">
             {data.todos.length === 0 ? (
               <p className="p-5 text-sm text-slate-400">Nothing on your plate. 🎉</p>
             ) : (
-              <ul className="divide-y divide-slate-100">
+              <ul className="divide-y divide-white/10">
                 {data.todos.map((t) => (
                   <TodoRow
                     key={t.id}
@@ -146,11 +146,11 @@ export default function OverviewPage() {
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
             Upcoming deadlines
           </h2>
-          <div className="rounded-2xl border border-slate-200 bg-white">
+          <div className="rounded-2xl border border-white/10 bg-slate-900/70">
             {data.deadlines.length === 0 ? (
               <p className="p-5 text-sm text-slate-400">No deadlines yet.</p>
             ) : (
-              <ul className="divide-y divide-slate-100">
+              <ul className="divide-y divide-white/10">
                 {data.deadlines.map((d) => (
                   <DeadlineRow key={d.id} deadline={d} />
                 ))}
@@ -180,12 +180,12 @@ function TodoRow({
         onClick={onComplete}
         disabled={busy}
         aria-label="Mark done"
-        className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-slate-300 text-transparent transition-colors hover:border-emerald-500 hover:bg-emerald-500 hover:text-white disabled:opacity-50"
+        className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-white/10 text-transparent transition-colors hover:border-emerald-500 hover:bg-emerald-500 hover:text-white disabled:opacity-50"
       >
         ✓
       </button>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-slate-800">{todo.title}</p>
+        <p className="truncate text-sm font-medium text-slate-100">{todo.title}</p>
         <p className="text-xs text-slate-400">{todo.projectName}</p>
       </div>
       <span
@@ -201,11 +201,11 @@ function DeadlineRow({ deadline }: { deadline: OverviewDeadline }) {
   const rel = dueRelative(deadline.dueDate);
   return (
     <li className="flex items-center gap-3 px-4 py-3">
-      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-100 text-base">
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-800 text-base">
         📅
       </span>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-slate-800">{deadline.title}</p>
+        <p className="truncate text-sm font-medium text-slate-100">{deadline.title}</p>
         <p className="text-xs text-slate-400">
           {deadline.projectName} · {formatDate(deadline.dueDate)}
         </p>
@@ -213,7 +213,7 @@ function DeadlineRow({ deadline }: { deadline: OverviewDeadline }) {
       <div className="shrink-0 text-right">
         <p className={`text-xs font-medium ${rel.tone}`}>{rel.label}</p>
         {!deadline.isConfirmed && (
-          <p className="text-[10px] text-amber-500">unconfirmed</p>
+          <p className="text-[10px] text-amber-400">unconfirmed</p>
         )}
       </div>
     </li>
@@ -222,7 +222,7 @@ function DeadlineRow({ deadline }: { deadline: OverviewDeadline }) {
 
 function EmptyCard({ children }: { children: React.ReactNode }) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-sm text-slate-500">
+    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-900/70 p-6 text-sm text-slate-400">
       {children}
     </div>
   );

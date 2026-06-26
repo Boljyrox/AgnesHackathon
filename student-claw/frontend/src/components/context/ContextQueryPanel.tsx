@@ -69,8 +69,8 @@ export function ContextQueryPanel({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white">
-      <header className="flex items-center gap-2 border-b border-slate-200 px-4 py-3">
+    <div className="flex h-full flex-col rounded-2xl border border-white/10 bg-slate-900/70">
+      <header className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
         <span className="grid h-7 w-7 place-items-center rounded-lg bg-brand-500 text-xs font-bold text-white">
           AI
         </span>
@@ -82,7 +82,7 @@ export function ContextQueryPanel({ projectId }: { projectId: string }) {
           type="button"
           onClick={() => send(SUMMARY_QUERY)}
           disabled={pending}
-          className="ml-auto rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 transition-colors hover:bg-brand-100 disabled:opacity-50"
+          className="ml-auto rounded-lg border border-brand-500/30 bg-brand-500/10 px-3 py-1.5 text-xs font-medium text-brand-300 transition-colors hover:bg-brand-500/20 disabled:opacity-50"
         >
           Suggest Summary
         </button>
@@ -94,7 +94,7 @@ export function ContextQueryPanel({ projectId }: { projectId: string }) {
             <p>
               Ask anything about this project — decisions, deadlines, who did what.
               <br />
-              Try the <span className="font-medium text-brand-600">Suggest Summary</span> button.
+              Try the <span className="font-medium text-brand-300">Suggest Summary</span> button.
             </p>
           </div>
         )}
@@ -111,8 +111,8 @@ export function ContextQueryPanel({ projectId }: { projectId: string }) {
               <div
                 className={`max-w-[85%] rounded-2xl rounded-bl-sm px-3 py-2 text-sm ${
                   m.error
-                    ? "bg-rose-50 text-rose-700"
-                    : "bg-slate-100 text-slate-800"
+                    ? "bg-rose-500/10 text-rose-300"
+                    : "bg-slate-800 text-slate-100"
                 }`}
               >
                 {m.html !== undefined ? (
@@ -131,7 +131,7 @@ export function ContextQueryPanel({ projectId }: { projectId: string }) {
 
         {pending && (
           <div className="flex justify-start">
-            <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm bg-slate-100 px-3 py-2.5">
+            <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm bg-slate-800 px-3 py-2.5">
               <Dot delay="0ms" />
               <Dot delay="120ms" />
               <Dot delay="240ms" />
@@ -141,7 +141,7 @@ export function ContextQueryPanel({ projectId }: { projectId: string }) {
       </div>
 
       <form
-        className="flex items-center gap-2 border-t border-slate-200 p-3"
+        className="flex items-center gap-2 border-t border-white/10 p-3"
         onSubmit={(e) => {
           e.preventDefault();
           void send(input);
@@ -156,7 +156,7 @@ export function ContextQueryPanel({ projectId }: { projectId: string }) {
           onChange={(e) => setInput(e.target.value)}
           placeholder="Ask about this project…"
           autoComplete="off"
-          className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+          className="flex-1 rounded-lg border border-white/10 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-500/30"
         />
         <button
           type="submit"
@@ -173,7 +173,7 @@ export function ContextQueryPanel({ projectId }: { projectId: string }) {
 function Dot({ delay }: { delay: string }) {
   return (
     <span
-      className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400"
+      className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500"
       style={{ animationDelay: delay }}
       aria-hidden="true"
     />

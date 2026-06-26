@@ -60,7 +60,10 @@ class AISettings:
     vision_model: str
     embed_model: str
     embed_dim: int
-    # OpenRouter fallback (Requirement 2).
+    # Embedding provider: "fastembed" (local, default) or "agnes".
+    embed_provider: str
+    fastembed_model: str
+    # OpenRouter fallback (Requirement 2) + Qwen VLM OCR.
     openrouter_api_key: str
     openrouter_base_url: str
     openrouter_model: str
@@ -80,9 +83,22 @@ class MinioSettings:
     secure: bool
 
 
+# Default local embedding model (no API needed). 384-dim.
+_FASTEMBED_DEFAULT = "BAAI/bge-small-en-v1.5"
+_FASTEMBED_DIM = 384
+
+
 @lru_cache(maxsize=1)
 def get_ai_settings() -> AISettings:
     chat_model = os.getenv("AGNES_CHAT_MODEL", "agnes-2.0-flash")
+    # Default to the local provider since Agnes exposes no embeddings endpoint.
+    embed_provider = os.getenv("EMBED_PROVIDER", "fastembed").lower()
+    fastembed_model = os.getenv("FASTEMBED_MODEL", _FASTEMBED_DEFAULT)
+    embed_dim = (
+        _FASTEMBED_DIM
+        if embed_provider == "fastembed"
+        else int(os.getenv("EMBED_DIM", "1536"))
+    )
     return AISettings(
         agnes_api_key=_require("AGNES_AI_API_KEY"),
         agnes_base_url=os.getenv("AGNES_AI_BASE_URL", "https://apihub.agnes-ai.com/v1"),
@@ -91,7 +107,9 @@ def get_ai_settings() -> AISettings:
         # the chat model (agnes-2.0-flash supports vision inputs).
         vision_model=os.getenv("AGNES_VISION_MODEL", chat_model),
         embed_model=os.getenv("AGNES_EMBED_MODEL", "agnes-embeddings"),
-        embed_dim=int(os.getenv("EMBED_DIM", "1536")),
+        embed_dim=embed_dim,
+        embed_provider=embed_provider,
+        fastembed_model=fastembed_model,
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
         openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         openrouter_model=os.getenv("OPENROUTER_MODEL", "google/gemini-3.5-flash"),

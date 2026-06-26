@@ -22,7 +22,7 @@ function statusDot(status: string): string {
     case "clearing":
       return "bg-amber-500";
     default:
-      return "bg-slate-300";
+      return "bg-slate-600";
   }
 }
 
@@ -49,15 +49,15 @@ export function Sidebar({ username = "You" }: { username?: string }) {
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-200 bg-white transition-transform duration-200 lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-white/10 bg-slate-900/70 transition-transform duration-200 lg:static lg:translate-x-0 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
         aria-label="Primary"
       >
         {/* Brand */}
         <Link
-          href="/"
-          className="flex h-14 items-center gap-2 border-b border-slate-200 px-4 hover:opacity-80 transition-opacity"
+          href="/dashboard"
+          className="flex h-14 items-center gap-2 border-b border-white/10 px-4 hover:opacity-80 transition-opacity"
         >
           <img
             src="/logo.svg"
@@ -77,19 +77,19 @@ export function Sidebar({ username = "You" }: { username?: string }) {
           {isLoading && (
             <ul className="space-y-1" aria-hidden="true">
               {Array.from({ length: 3 }).map((_, i) => (
-                <li key={i} className="h-9 animate-pulse rounded-lg bg-slate-100" />
+                <li key={i} className="h-9 animate-pulse rounded-lg bg-slate-800" />
               ))}
             </ul>
           )}
 
           {isError && (
-            <p className="px-2 text-sm text-rose-600">Couldn&apos;t load projects.</p>
+            <p className="px-2 text-sm text-rose-400">Couldn&apos;t load projects.</p>
           )}
 
           {projects && projects.length === 0 && (
-            <p className="px-2 text-sm text-slate-500">
+            <p className="px-2 text-sm text-slate-400">
               No projects yet.{" "}
-              <Link href="/projects/link" className="text-brand-600 underline">
+              <Link href="/projects/link" className="text-brand-300 underline">
                 Link one
               </Link>
               .
@@ -108,8 +108,8 @@ export function Sidebar({ username = "You" }: { username?: string }) {
                     aria-current={active ? "page" : undefined}
                     className={`flex items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors ${
                       active
-                        ? "bg-brand-50 font-medium text-brand-700"
-                        : "text-slate-700 hover:bg-slate-100"
+                        ? "bg-brand-500/10 font-medium text-brand-300"
+                        : "text-slate-200 hover:bg-slate-800"
                     }`}
                   >
                     <span
@@ -130,13 +130,13 @@ export function Sidebar({ username = "You" }: { username?: string }) {
         </nav>
 
         {/* User / settings menu */}
-        <div className="relative border-t border-slate-200 p-3">
+        <div className="relative border-t border-white/10 p-3">
           <button
             type="button"
             onClick={() => setMenuOpen((v) => !v)}
             aria-expanded={menuOpen}
             aria-haspopup="menu"
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-slate-100"
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-slate-800"
           >
             <Avatar name={username} size="md" />
             <span className="truncate text-sm font-medium">{username}</span>
@@ -153,12 +153,12 @@ export function Sidebar({ username = "You" }: { username?: string }) {
           {menuOpen && (
             <div
               role="menu"
-              className="absolute bottom-16 left-3 right-3 z-10 animate-fade-in rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+              className="absolute bottom-16 left-3 right-3 z-10 animate-fade-in rounded-lg border border-white/10 bg-slate-900/70 py-1 shadow-lg"
             >
               <Link
                 href="/settings"
                 role="menuitem"
-                className="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                className="block px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
                 onClick={() => setMenuOpen(false)}
               >
                 Account settings
@@ -166,7 +166,7 @@ export function Sidebar({ username = "You" }: { username?: string }) {
               <Link
                 href="/settings/integrations"
                 role="menuitem"
-                className="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                className="block px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
                 onClick={() => setMenuOpen(false)}
               >
                 Integrations
@@ -175,7 +175,7 @@ export function Sidebar({ username = "You" }: { username?: string }) {
                 <button
                   type="submit"
                   role="menuitem"
-                  className="block w-full px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50"
+                  className="block w-full px-3 py-2 text-left text-sm text-rose-400 hover:bg-rose-500/10"
                 >
                   Sign out
                 </button>

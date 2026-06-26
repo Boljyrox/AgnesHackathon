@@ -90,6 +90,17 @@ class ProjectStatus(str, enum.Enum):
     clearing = "clearing"
 
 
+class GroupMode(str, enum.Enum):
+    """Operating mode for a group (Multi-Mode Group Agent)."""
+    uninitialized = "uninitialized"
+    projects = "projects"
+    fun = "fun"
+    expense = "expense"
+    event = "event"
+    study = "study"
+    general = "general"
+
+
 class MemberRole(str, enum.Enum):
     member = "member"
     lead = "lead"
@@ -209,6 +220,23 @@ class Project(Base):
     module_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     # Free-text project goals/objectives (Requirement 3).
     goals: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # ── Multi-Mode Group Agent state ──────────────────────────────────────
+    # Telegram user-id of the immutable admin (set once at /init).
+    group_admin_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    # Operating mode (stored as text; see GroupMode). New groups start
+    # 'uninitialized' and pick a mode during onboarding.
+    group_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'uninitialized'")
+    )
+    # Activate/deactivate switch (the global state engine).
+    bot_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("TRUE")
+    )
+    # Admin-toggled AI model allow-list, e.g. {"qwen_vl": true, "gemini_fallback": true}.
+    allowed_models: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
 
     status: Mapped[ProjectStatus] = mapped_column(
         project_status_enum,
@@ -640,10 +668,36 @@ class AIRequestLog(Base):
         return f"<AIRequestLog kind={self.kind} status={self.status} model={self.model}>"
 
 
+# ===========================================================================
+# expenses  (Mode C — Expense Tracker)
+# ===========================================================================
+class Expense(Base):
+    """A shared expense logged in an expense-mode group."""
+
+    __tablename__ = "expenses"
+    __table_args__ = (Index("ix_expenses_project_id", "project_id"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    payer_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    payer_telegram_user_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Expense {self.payer_name} {self.amount} {self.description!r}>"
+
+
 __all__ = [
     "Base",
     # enums (python)
     "ProjectStatus",
+    "GroupMode",
     "MemberRole",
     "LinkedVia",
     "TaskSource",
@@ -660,4 +714,5 @@ __all__ = [
     "ContributionMetric",
     "ProjectLinkToken",
     "AIRequestLog",
+    "Expense",
 ]
