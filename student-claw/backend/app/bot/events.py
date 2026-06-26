@@ -49,6 +49,24 @@ def _channel(project_id: str) -> str:
     return f"project_updates:{project_id}"
 
 
+# Dedicated channel the bot process subscribes to in order to push messages
+# into a Telegram group (e.g. manual web delegations — Requirement 3).
+BOT_NOTIFICATION_CHANNEL = "bot_notifications"
+
+
+async def publish_bot_notification(chat_id: int, text: str) -> None:
+    """Ask the bot process to send `text` (Telegram HTML) into `chat_id`."""
+    redis = await _get_redis()
+    if redis is None:
+        return
+    try:
+        await redis.publish(
+            BOT_NOTIFICATION_CHANNEL, json.dumps({"chat_id": chat_id, "text": text})
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Failed to publish bot notification for %s: %s", chat_id, exc)
+
+
 async def publish_project_event(
     project_id: str,
     event_type: str,

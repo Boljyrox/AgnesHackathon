@@ -81,11 +81,24 @@ def _created_at() -> Mapped[datetime]:
 # Python-side enums (mirror the DB ENUM types)
 # ---------------------------------------------------------------------------
 class ProjectStatus(str, enum.Enum):
+    upcoming = "upcoming"
     active = "active"
+    completed = "completed"
     archived = "archived"
     cleared = "cleared"
     # transient state used during cache cleansing (§5.3 Step 2)
     clearing = "clearing"
+
+
+class GroupMode(str, enum.Enum):
+    """Operating mode for a group (Multi-Mode Group Agent)."""
+    uninitialized = "uninitialized"
+    projects = "projects"
+    fun = "fun"
+    expense = "expense"
+    event = "event"
+    study = "study"
+    general = "general"
 
 
 class MemberRole(str, enum.Enum):
@@ -205,6 +218,25 @@ class Project(Base):
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     module_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Free-text project goals/objectives (Requirement 3).
+    goals: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # ── Multi-Mode Group Agent state ──────────────────────────────────────
+    # Telegram user-id of the immutable admin (set once at /init).
+    group_admin_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    # Operating mode (stored as text; see GroupMode). New groups start
+    # 'uninitialized' and pick a mode during onboarding.
+    group_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'uninitialized'")
+    )
+    # Activate/deactivate switch (the global state engine).
+    bot_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("TRUE")
+    )
+    # Admin-toggled AI model allow-list, e.g. {"qwen_vl": true, "gemini_fallback": true}.
+    allowed_models: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
 
     status: Mapped[ProjectStatus] = mapped_column(
         project_status_enum,
@@ -586,10 +618,86 @@ class ProjectLinkToken(Base):
         return f"<ProjectLinkToken token={self.token[:8]}… chat_id={self.chat_id}>"
 
 
+# ===========================================================================
+# ai_request_logs  (observability — SUTD_Admin dashboard)
+# ===========================================================================
+class AIRequestLog(Base):
+    """
+    Lightweight audit log of every call made to Agnes AI (chat, embedding,
+    vision). Written best-effort by app.ai.observability; never blocks the
+    request path. Payloads are trimmed summaries, not full transcripts.
+    """
+
+    __tablename__ = "ai_request_logs"
+    __table_args__ = (
+        Index("ix_ai_request_logs_created_at", "created_at"),
+        Index("ix_ai_request_logs_chat_id", "chat_id"),
+        Index("ix_ai_request_logs_kind", "kind"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    created_at: Mapped[datetime] = _created_at()
+
+    chat_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    project_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)   # chat|embedding|vision
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)  # success|error
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    request_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    response_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    request_payload: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    response_payload: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<AIRequestLog kind={self.kind} status={self.status} model={self.model}>"
+
+
+# ===========================================================================
+# expenses  (Mode C — Expense Tracker)
+# ===========================================================================
+class Expense(Base):
+    """A shared expense logged in an expense-mode group."""
+
+    __tablename__ = "expenses"
+    __table_args__ = (Index("ix_expenses_project_id", "project_id"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    payer_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    payer_telegram_user_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Expense {self.payer_name} {self.amount} {self.description!r}>"
+
+
 __all__ = [
     "Base",
     # enums (python)
     "ProjectStatus",
+    "GroupMode",
     "MemberRole",
     "LinkedVia",
     "TaskSource",
@@ -605,4 +713,6 @@ __all__ = [
     "MessageLog",
     "ContributionMetric",
     "ProjectLinkToken",
+    "AIRequestLog",
+    "Expense",
 ]

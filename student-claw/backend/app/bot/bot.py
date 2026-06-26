@@ -30,6 +30,30 @@ logger = logging.getLogger("student_claw.bot")
 
 _application: Application | None = None
 
+# Commands shown in Telegram's "/" menu.
+_BOT_COMMANDS = [
+    ("sc", "Open the Student Claw menu"),
+    ("ask", "Ask Agnes anything about this project"),
+]
+
+
+async def _post_init(application: Application) -> None:
+    """Register the command menu + start the Redis notification listener."""
+    try:
+        await application.bot.set_my_commands(_BOT_COMMANDS)
+    except Exception as exc:  # pragma: no cover - network dependent
+        logger.warning("Could not set bot command menu: %s", exc)
+
+    from app.bot.notifications import start_notification_listener
+
+    start_notification_listener(application)
+
+
+async def _post_shutdown(application: Application) -> None:
+    from app.bot.notifications import stop_notification_listener
+
+    await stop_notification_listener()
+
 
 def build_application() -> Application:
     """Construct (once) and return the shared PTB Application singleton."""
@@ -42,6 +66,8 @@ def build_application() -> Application:
         ApplicationBuilder()
         .token(settings.bot_token)
         .concurrent_updates(True)  # process updates concurrently on the loop
+        .post_init(_post_init)
+        .post_shutdown(_post_shutdown)
         .build()
     )
     register_handlers(application)

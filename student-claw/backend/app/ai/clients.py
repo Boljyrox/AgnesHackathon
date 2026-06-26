@@ -36,6 +36,26 @@ def get_agnes_client() -> AsyncOpenAI:
 
 
 @lru_cache(maxsize=1)
+def get_openrouter_client() -> AsyncOpenAI | None:
+    """
+    OpenAI-compatible client for the OpenRouter fallback (Requirement 2).
+    Returns None when OPENROUTER_API_KEY is not configured, so callers can skip
+    the fallback gracefully.
+    """
+    settings = get_ai_settings()
+    if not settings.openrouter_api_key:
+        logger.info("OpenRouter not configured; fallback disabled.")
+        return None
+    logger.info("Initialising OpenRouter fallback client (model=%s).", settings.openrouter_model)
+    return AsyncOpenAI(
+        api_key=settings.openrouter_api_key,
+        base_url=settings.openrouter_base_url,
+        max_retries=2,
+        timeout=30.0,
+    )
+
+
+@lru_cache(maxsize=1)
 def get_qdrant_client() -> AsyncQdrantClient:
     """Async Qdrant client."""
     settings = get_qdrant_settings()

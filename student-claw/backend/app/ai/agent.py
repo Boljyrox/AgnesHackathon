@@ -15,13 +15,17 @@ import logging
 from typing import Any, Optional
 
 from app.ai import repository, tools
-from app.ai.clients import get_agnes_client
+from app.ai.clients import get_agnes_client, get_openrouter_client
+from app.ai.observability import logged_chat
 from app.ai.config import (
     AGENT_MAX_ITERATIONS,
     AGENT_TIMEOUT_SECONDS,
+    MEMORY_TURNS,
     RECENT_MESSAGE_WINDOW,
     get_ai_settings,
 )
+
+FALLBACK_NOTE = "\n\n<i>⚡ Processed via Gemini Fallback</i>"
 
 logger = logging.getLogger("student_claw.ai.agent")
 
@@ -64,9 +68,11 @@ _BEHAVIOR = (
 
 
 def build_system_prompt(
-    ctx: repository.ProjectContext, recent: list[repository.RecentMessage]
+    ctx: repository.ProjectContext,
+    recent: list[repository.RecentMessage],
+    memory: list[repository.RecentMessage] | None = None,
 ) -> str:
-    """Assemble the five-section system prompt (§3.2)."""
+    """Assemble the system prompt (§3.2) with short-term conversation memory."""
     members_lines = (
         "\n".join(
             f"- {m.display_name} (@{m.telegram_username or 'no_username'}) — {m.role}"
@@ -80,14 +86,30 @@ def build_system_prompt(
         or "(no recent messages)"
     )
 
+    # SHORT-TERM MEMORY — the last few turns, so the agent remembers prior
+    # questions/answers and stays consistent across the conversation (Req 2).
+    memory_lines = (
+        "\n".join(f"{m.sender}: {m.text}" for m in (memory or []))
+        or "(no prior turns)"
+    )
+
+    # Mode persona (Multi-Mode Group Agent) — shifts tone per group mode.
+    from app.bot.modes import persona_for
+
+    persona = persona_for(ctx.group_mode)
+    persona_block = f"{persona}\n\n" if persona else ""
+
     return (
         f"{_ROLE}\n\n"
+        f"{persona_block}"
         f"PROJECT CONTEXT\n"
         f"Name: {ctx.name}\n"
         f"Module: {ctx.module_code or 'N/A'}\n"
         f"chat_id: {ctx.chat_id}\n"
         f"Status: {ctx.status}\n\n"
         f"PROJECT MEMBERS\n{members_lines}\n\n"
+        f"SHORT-TERM MEMORY (most recent turns — use to stay consistent with the "
+        f"ongoing conversation)\n{memory_lines}\n\n"
         f"RECENT MESSAGES (oldest first)\n{recent_lines}\n\n"
         f"{_BEHAVIOR}\n\n"
         f"{_FORMATTING}"
@@ -112,12 +134,14 @@ async def _run_loop(chat_id: int, messages: list[dict[str, Any]]) -> str:
     seen_signatures: set[str] = set()
 
     for iteration in range(1, AGENT_MAX_ITERATIONS + 1):
-        response = await client.chat.completions.create(
+        response = await logged_chat(
+            client,
             model=model,
             messages=messages,
             tools=tools.TOOLS,
             tool_choice="auto",
             temperature=0.2,
+            chat_id=chat_id,
         )
         choice = response.choices[0]
         msg = choice.message
@@ -185,8 +209,8 @@ async def _run_loop(chat_id: int, messages: list[dict[str, Any]]) -> str:
             "content": "Tool budget exhausted. Reply now using what you have, in Telegram HTML.",
         }
     )
-    final = await client.chat.completions.create(
-        model=model, messages=messages, temperature=0.2
+    final = await logged_chat(
+        client, model=model, messages=messages, temperature=0.2, chat_id=chat_id
     )
     return (final.choices[0].message.content or "").strip()
 
@@ -195,39 +219,72 @@ def _tool_message(tool_call_id: str, content: str) -> dict[str, Any]:
     return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
 
 
+async def _openrouter_fallback(
+    base_messages: list[dict[str, Any]], *, chat_id: int
+) -> Optional[str]:
+    """
+    Fallback to OpenRouter (google/gemini-3.5-flash) when Agnes fails or times
+    out (Requirement 2). Uses the clean base prompt (no tool transcript); the
+    answer is grounded in the project context + memory already in the prompt.
+    Returns None if OpenRouter is unconfigured or also fails.
+    """
+    client = get_openrouter_client()
+    if client is None:
+        return None
+    model = get_ai_settings().openrouter_model
+    try:
+        resp = await logged_chat(
+            client, model=model, messages=base_messages, chat_id=chat_id, temperature=0.3
+        )
+        return (resp.choices[0].message.content or "").strip() or None
+    except Exception as exc:
+        logger.error("OpenRouter fallback failed for chat_id=%s: %s", chat_id, exc)
+        return None
+
+
 async def run_agent(
     chat_id: int,
     user_message: str,
     *,
     history: Optional[list[dict[str, Any]]] = None,
+    system_directive: Optional[str] = None,
 ) -> str:
     """
-    Top-level entrypoint. Loads project context, builds the prompt, runs the
-    bounded loop under a 30s budget, and returns Telegram-HTML-safe text.
-
-    Returns a graceful fallback string on timeout / missing project rather than
-    raising, so the bot can always reply.
+    Top-level entrypoint. Loads project context + short-term memory, builds the
+    prompt, runs the bounded loop under a 30s budget, and returns Telegram-HTML
+    text. On Agnes failure/timeout it falls back to OpenRouter/Gemini, appending
+    a "⚡ Processed via Gemini Fallback" note. Never raises.
     """
     ctx = await repository.load_project_context(chat_id)
     if ctx is None:
         return "⚠️ This group isn't registered yet. Send /start to set up Student Claw."
 
     recent = await repository.load_recent_messages(chat_id, RECENT_MESSAGE_WINDOW)
+    memory = recent[-MEMORY_TURNS:] if recent else []
 
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": build_system_prompt(ctx, recent)}
+    base_messages: list[dict[str, Any]] = [
+        {"role": "system", "content": build_system_prompt(ctx, recent, memory)}
     ]
+    if system_directive:
+        base_messages.append({"role": "system", "content": system_directive})
     if history:
-        messages.extend(history)
-    messages.append({"role": "user", "content": user_message})
+        base_messages.extend(history)
+    base_messages.append({"role": "user", "content": user_message})
 
+    # Primary: Agnes (with tools), bounded by the timeout. Pass a copy so the
+    # clean base_messages survive for the fallback.
     try:
         return await asyncio.wait_for(
-            _run_loop(chat_id, messages), timeout=AGENT_TIMEOUT_SECONDS
+            _run_loop(chat_id, list(base_messages)), timeout=AGENT_TIMEOUT_SECONDS
         )
     except asyncio.TimeoutError:
-        logger.warning("Agent timed out after %ss for chat_id=%s.", AGENT_TIMEOUT_SECONDS, chat_id)
-        return "⏳ That took too long to process. Please try again or narrow your question."
-    except Exception as exc:  # pragma: no cover - top-level guard
-        logger.exception("Agent failure for chat_id=%s: %s", chat_id, exc)
-        return "⚠️ Something went wrong while processing that. Please try again."
+        logger.warning("Agent timed out (%ss) for chat_id=%s; trying fallback.", AGENT_TIMEOUT_SECONDS, chat_id)
+    except Exception as exc:
+        logger.exception("Agent error for chat_id=%s; trying fallback: %s", chat_id, exc)
+
+    # Gemini fallback — only if the admin hasn't disabled it (/admin_settings).
+    if ctx.allowed_models.get("gemini_fallback", True):
+        fallback = await _openrouter_fallback(base_messages, chat_id=chat_id)
+        if fallback:
+            return f"{fallback}{FALLBACK_NOTE}"
+    return "⚠️ Something went wrong while processing that. Please try again."

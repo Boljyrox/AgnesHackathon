@@ -1,0 +1,129 @@
+"use client";
+
+/** A single draggable task card (blueprint §6.4). */
+
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+
+import { Avatar } from "@/components/ui/Avatar";
+import { updateTaskAssignee, type MemberDto } from "@/lib/api";
+import { PRIORITY_META, type Task } from "@/lib/domain";
+
+export function PriorityBadge({ priority }: { priority: Task["priority"] }) {
+  const meta = PRIORITY_META[priority];
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset ${meta.className}`}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+export function TaskCardContent({ task }: { task: Task }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm font-medium leading-snug text-slate-100">{task.title}</p>
+        <PriorityBadge priority={task.priority} />
+      </div>
+
+      {task.deadlineTitle && (
+        <span className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-300">
+          <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 4v4l3 2-.75 1.2L7 9V4z M8 1a7 7 0 100 14A7 7 0 008 1z" />
+          </svg>
+          {task.deadlineTitle}
+        </span>
+      )}
+
+      <div className="flex items-center gap-2 pt-1">
+        {task.assignee ? (
+          <>
+            <Avatar name={task.assignee.displayName} size="sm" />
+            <span className="text-xs text-slate-400">{task.assignee.displayName}</span>
+          </>
+        ) : (
+          <span className="text-xs italic text-slate-400">Unassigned</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function TaskCard({
+  task,
+  projectId,
+  members,
+}: {
+  task: Task;
+  projectId: string;
+  members: MemberDto[];
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: task.id, data: { status: task.status } });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className={`cursor-grab touch-none rounded-xl border border-white/10 bg-slate-900/60 p-3 shadow-sm outline-none backdrop-blur-md transition-all hover:border-brand-500/30 focus-visible:ring-2 focus-visible:ring-brand-500 active:cursor-grabbing ${
+        isDragging ? "opacity-40" : "hover:shadow-glow"
+      }`}
+      aria-roledescription="Draggable task"
+    >
+      <TaskCardContent task={task} />
+      <AssigneeSelect task={task} projectId={projectId} members={members} />
+    </li>
+  );
+}
+
+function AssigneeSelect({
+  task,
+  projectId,
+  members,
+}: {
+  task: Task;
+  projectId: string;
+  members: MemberDto[];
+}) {
+  const queryClient = useQueryClient();
+  const current = task.assignee?.telegramUsername ?? "";
+
+  const reassign = useMutation({
+    mutationFn: (username: string) =>
+      updateTaskAssignee(projectId, task.id, username || null),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["overview"] });
+    },
+  });
+
+  return (
+    <select
+      value={current}
+      disabled={reassign.isPending}
+      // Stop the drag sensor from hijacking the dropdown interaction.
+      onPointerDown={(e) => e.stopPropagation()}
+      onChange={(e) => reassign.mutate(e.target.value)}
+      aria-label="Assign task"
+      className="mt-2 w-full rounded-md border border-white/10 bg-slate-950 px-2 py-1 text-xs text-slate-300 outline-none focus:border-brand-400"
+    >
+      <option value="">Unassigned</option>
+      {members.map((m) => (
+        <option key={m.studentId} value={m.telegramUsername ?? ""} disabled={!m.telegramUsername}>
+          {m.displayName}
+          {m.telegramUsername ? "" : " (no telegram)"}
+        </option>
+      ))}
+    </select>
+  );
+}

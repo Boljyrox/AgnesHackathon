@@ -35,6 +35,7 @@ from app.ai.chunking import (
     chunk_pptx_slides,
 )
 from app.ai.clients import get_agnes_client, get_qdrant_client
+from app.ai.observability import logged_embeddings
 from app.ai.config import (
     EMBED_BATCH_SIZE,
     MIME_PPTX,
@@ -59,9 +60,24 @@ async def ensure_collection(chat_id: int) -> str:
     lock = _collection_locks.setdefault(name, asyncio.Lock())
     async with lock:
         client = get_qdrant_client()
-        if await client.collection_exists(name):
-            return name
         dim = get_ai_settings().embed_dim
+        if await client.collection_exists(name):
+            # Auto-heal a dimension mismatch (e.g. after switching embedding
+            # provider). Safe because a wrong-dim collection can't hold usable
+            # vectors anyway.
+            try:
+                info = await client.get_collection(name)
+                existing = info.config.params.vectors.size  # type: ignore[union-attr]
+            except Exception:
+                existing = dim
+            if existing != dim:
+                logger.warning(
+                    "Collection %s dim %s != expected %s; recreating.",
+                    name, existing, dim,
+                )
+                await client.delete_collection(name)
+            else:
+                return name
         await client.create_collection(
             collection_name=name,
             vectors_config=qmodels.VectorParams(
@@ -75,17 +91,45 @@ async def ensure_collection(chat_id: int) -> str:
 # ---------------------------------------------------------------------------
 # Embeddings
 # ---------------------------------------------------------------------------
-async def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Embed texts in batches of <=20 via the Agnes AI /embeddings endpoint."""
+_fastembed_model = None
+
+
+def _get_fastembed():
+    global _fastembed_model
+    if _fastembed_model is None:
+        from fastembed import TextEmbedding
+
+        name = get_ai_settings().fastembed_model
+        logger.info("Loading local embedding model %s (first run downloads it).", name)
+        _fastembed_model = TextEmbedding(model_name=name)
+    return _fastembed_model
+
+
+def _embed_fastembed_sync(texts: list[str]) -> list[list[float]]:
+    model = _get_fastembed()
+    return [vec.tolist() for vec in model.embed(texts)]
+
+
+async def embed_texts(
+    texts: list[str], *, chat_id: Optional[int] = None
+) -> list[list[float]]:
+    """
+    Embed texts. Uses a local model (fastembed) by default since Agnes exposes
+    no embeddings endpoint; set EMBED_PROVIDER=agnes to use Agnes instead.
+    """
     if not texts:
         return []
+    settings = get_ai_settings()
+    if settings.embed_provider == "fastembed":
+        return await asyncio.to_thread(_embed_fastembed_sync, texts)
+
+    # Agnes provider.
     client = get_agnes_client()
-    model = get_ai_settings().embed_model
+    model = settings.embed_model
     vectors: list[list[float]] = []
     for start in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[start : start + EMBED_BATCH_SIZE]
-        resp = await client.embeddings.create(model=model, input=batch)
-        # Preserve request order.
+        resp = await logged_embeddings(client, model=model, input=batch, chat_id=chat_id)
         ordered = sorted(resp.data, key=lambda d: d.index)
         vectors.extend(d.embedding for d in ordered)
     return vectors
@@ -114,13 +158,17 @@ async def _resolve_text_and_chunks(
         # (Sliding-window conversational chunking is used by reindex_chat.)
         return _Prepared([Chunk(text, 0)], None)
 
+    # Admin model toggle: Qwen-VL OCR can be disabled per group (/admin_settings).
+    use_vlm = (await repository.get_allowed_models(msg.chat_id)).get("qwen_vl", True)
+
     if ctype == "image":
         if not msg.file_storage_path:
             return None
         text = msg.extracted_text
         if not text:
             data = await storage.fetch_bytes(msg.file_storage_path)
-            parsed = await parser.extract_text_from_image(data)
+            # Qwen 2.5 VL 72B (OpenRouter) OCR — primary path.
+            parsed = await parser.extract_text_from_image(data, use_vlm=use_vlm)
             text = parsed.text
             if text:
                 await repository.save_extracted_text(msg.id, text)
@@ -131,17 +179,28 @@ async def _resolve_text_and_chunks(
     if ctype == "document":
         if not msg.file_storage_path:
             return None
-        data = await storage.fetch_bytes(msg.file_storage_path)
-        parsed = await parser.parse_document(
-            data, msg.file_mime_type, _basename(msg.file_storage_path)
-        )
-        if not parsed.text:
+        # parse_document handles PDF (PyMuPDF text → Qwen-VL per scanned page)
+        # and PPTX (python-pptx). Use the cached extracted_text when present.
+        text = msg.extracted_text
+        parsed_segments: list[str] = []
+        is_pptx = (msg.file_mime_type or "").lower() == MIME_PPTX
+        if not text:
+            data = await storage.fetch_bytes(msg.file_storage_path)
+            parsed = await parser.parse_document(
+                data, msg.file_mime_type, _basename(msg.file_storage_path), use_vlm=use_vlm
+            )
+            text = parsed.text
+            parsed_segments = parsed.segments
+            is_pptx = is_pptx or parsed.modality == "pptx"
+            if text:
+                await repository.save_extracted_text(msg.id, text)
+        if not text:
             return None
-        await repository.save_extracted_text(msg.id, parsed.text)
-        if (msg.file_mime_type or "").lower() == MIME_PPTX or parsed.modality == "pptx":
-            chunks = chunk_pptx_slides(parsed.segments)
-        else:
-            chunks = chunk_pdf(parsed.text)
+        chunks = (
+            chunk_pptx_slides(parsed_segments)
+            if (is_pptx and parsed_segments)
+            else chunk_pdf(text)
+        )
         return _Prepared(chunks, _basename(msg.file_storage_path))
 
     # voice (no transcription yet) or unknown → skip.
@@ -172,7 +231,7 @@ async def vectorize_message(message_log_id: str) -> int:
         return 0
 
     texts = [c.text for c in prepared.chunks]
-    vectors = await embed_texts(texts)
+    vectors = await embed_texts(texts, chat_id=msg.chat_id)
     if len(vectors) != len(texts):
         raise RuntimeError(
             f"Embedding count mismatch: {len(vectors)} vs {len(texts)} chunks."
@@ -236,7 +295,7 @@ async def reindex_chat(chat_id: int) -> int:
     if not windows:
         return 0
 
-    vectors = await embed_texts([w.text for w in windows])
+    vectors = await embed_texts([w.text for w in windows], chat_id=chat_id)
     name = await ensure_collection(chat_id)
     points: list[qmodels.PointStruct] = []
     for window, vector in zip(windows, vectors):
@@ -291,7 +350,7 @@ async def semantic_search(
     if not await client.collection_exists(name):
         return []
 
-    query_vec = (await embed_texts([query]))[0]
+    query_vec = (await embed_texts([query], chat_id=chat_id))[0]
 
     query_filter = None
     if content_type_filter and content_type_filter != "all":
@@ -304,13 +363,15 @@ async def semantic_search(
             ]
         )
 
-    hits = await client.search(
+    # query_points is the current Qdrant API (replaces the removed .search()).
+    response = await client.query_points(
         collection_name=name,
-        query_vector=query_vec,
+        query=query_vec,
         limit=max(top_k * 2, top_k),  # over-fetch to survive dedup
         query_filter=query_filter,
         with_payload=True,
     )
+    hits = response.points
 
     best: dict[str, SearchResult] = {}
     for h in hits:
@@ -329,6 +390,117 @@ async def semantic_search(
             )
     ranked = sorted(best.values(), key=lambda r: r.score, reverse=True)
     return ranked[:top_k]
+
+
+# ---------------------------------------------------------------------------
+# Cache cleansing (blueprint §5.3) — 8-step transactional procedure
+# ---------------------------------------------------------------------------
+@dataclass
+class CleanseResult:
+    ok: bool
+    vectors_deleted: bool
+    files_deleted: bool
+    messages_soft_deleted: int
+    status: str
+
+
+async def clear_project_cache(project_id: str, *, include_files: bool) -> CleanseResult:
+    """
+    Execute the cache-cleanse for a project. The authorization check (lead role)
+    is enforced by the calling endpoint; this performs steps 2-8.
+
+    Qdrant and PostgreSQL are separate systems, so the steps are not one atomic
+    transaction — each is made idempotent and partial failures are isolated:
+      - vector delete fails  → abort, status reset to 'active'
+      - MinIO delete fails   → vectors already gone; logged, continue
+      - soft-delete fails    → retried by caller; idempotent
+    """
+    from sqlalchemy import func, update as _sql_update
+
+    from app.database.connection import session_scope
+    from app.database.models import Deadline, MessageLog, Project
+
+    pid = uuid.UUID(project_id)
+    vectors_deleted = False
+    files_deleted = False
+    soft_deleted = 0
+
+    # Step 2: LOCK PROJECT (halt ingestion — the worker checks status).
+    async with session_scope() as session:
+        project = await session.get(Project, pid)
+        if project is None:
+            raise ValueError(f"Project {project_id} not found.")
+        chat_id = project.chat_id
+        project.status = "clearing"  # type: ignore[assignment]
+
+    name = collection_name(chat_id)
+
+    # Step 3: DELETE VECTOR STORE (single atomic Qdrant call).
+    try:
+        client = get_qdrant_client()
+        if await client.collection_exists(name):
+            await client.delete_collection(collection_name=name)
+        vectors_deleted = True
+    except Exception as exc:
+        logger.error("Cache cleanse: vector delete failed for %s: %s", name, exc)
+        async with session_scope() as session:
+            await session.execute(
+                _sql_update(Project).where(Project.id == pid).values(status="active")
+            )
+        raise
+
+    # Step 4: DELETE MINIO FILES (optional, configurable).
+    if include_files:
+        try:
+            await storage.delete_bucket(chat_id)
+            files_deleted = True
+        except Exception as exc:  # non-fatal: vectors already cleared
+            logger.error("Cache cleanse: MinIO bucket delete failed: %s", exc)
+
+    # Step 5: SOFT-DELETE MESSAGE LOGS (optimized single UPDATE).
+    # First break the relational references INTO message_logs so neither the
+    # soft-delete nor any later hard-delete/retention sweep trips a FK constraint
+    # (deadlines.source_message_log_id is the only real FK). tasks reference logs
+    # only via JSONB metadata (no constraint), so nothing to break there.
+    async with session_scope() as session:
+        await session.execute(
+            _sql_update(Deadline)
+            .where(
+                Deadline.project_id == pid,
+                Deadline.source_message_log_id.is_not(None),
+            )
+            .values(source_message_log_id=None)
+        )
+        result = await session.execute(
+            _sql_update(MessageLog)
+            .where(MessageLog.project_id == pid, MessageLog.deleted_at.is_(None))
+            .values(
+                deleted_at=func.now(),
+                is_vectorized=False,
+                qdrant_point_ids=[],
+            )
+        )
+        soft_deleted = result.rowcount or 0
+
+    # Step 6: RESET PROJECT STATUS (steps 7-8: relational data untouched).
+    async with session_scope() as session:
+        await session.execute(
+            _sql_update(Project)
+            .where(Project.id == pid)
+            .values(status="archived", qdrant_point_count=0, cleared_at=func.now())
+        )
+
+    logger.info(
+        "Cache cleansed project %s: vectors=%s files=%s msgs=%d",
+        project_id, vectors_deleted, files_deleted, soft_deleted,
+    )
+    return CleanseResult(
+        ok=True,
+        vectors_deleted=vectors_deleted,
+        files_deleted=files_deleted,
+        messages_soft_deleted=soft_deleted,
+        status="archived",
+    )
 
 
 # ---------------------------------------------------------------------------

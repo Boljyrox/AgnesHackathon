@@ -55,6 +55,8 @@ class ProjectContext:
     name: str
     module_code: Optional[str]
     status: str
+    group_mode: str = "projects"
+    allowed_models: dict = field(default_factory=dict)
     members: list[MemberInfo] = field(default_factory=list)
 
 
@@ -88,8 +90,19 @@ async def load_project_context(chat_id: int) -> Optional[ProjectContext]:
             name=project.name,
             module_code=project.module_code,
             status=project.status.value,
+            group_mode=project.group_mode,
+            allowed_models=dict(project.allowed_models or {}),
             members=members,
         )
+
+
+async def get_allowed_models(chat_id: int) -> dict:
+    """AI-model allow-list for a chat (empty = all allowed)."""
+    async with session_scope() as session:
+        models = await session.scalar(
+            select(Project.allowed_models).where(Project.chat_id == chat_id)
+        )
+    return dict(models or {})
 
 
 @dataclass
@@ -313,7 +326,19 @@ async def delegate_task(
         )
         session.add(task)
         await session.flush()
-        return ToolWriteResult(True, f"Assigned to @{telegram_username}.", str(task.id))
+        task_id, project_id = str(task.id), str(project.id)
+
+    # Published AFTER commit so the web's refetch sees the new task (bidirectional
+    # sync — Agnes delegations appear live on the web board, Requirement 3).
+    from app.bot import events
+
+    await events.publish_project_event(
+        project_id=project_id,
+        event_type="task_created",
+        payload={"task_id": task_id},
+        triggered_by="ai_agent",
+    )
+    return ToolWriteResult(True, f"Assigned to @{telegram_username}.", task_id)
 
 
 async def log_contribution_metric(
